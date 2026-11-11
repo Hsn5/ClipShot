@@ -1,5 +1,6 @@
 package com.example.clipshot
 
+import android.accessibilityservice.AccessibilityButtonController
 import android.accessibilityservice.AccessibilityService
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -24,18 +25,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         var instance: ScreenshotAccessibilityService? = null
             private set
 
-        // Tracks the last active foreground app package (excluding ClipShot and SystemUI)
-        var lastForegroundPackage: String? = null
-            private set
-
-        private val IGNORED_PACKAGES = setOf(
-            "com.example.clipshot",
-            "com.android.systemui",
-            "com.sec.android.app.launcher",
-            "com.google.android.apps.nexuslauncher",
-            "com.samsung.android.app.routines"
-        )
-
         fun captureNow(delayMs: Long = 0L) {
             val service = instance ?: return
             Handler(Looper.getMainLooper()).postDelayed({
@@ -52,21 +41,36 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         }
     }
 
+    private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
+        override fun onClicked(controller: AccessibilityButtonController?) {
+            // يشتغل فوراً عند الضغط على اختصار Accessibility بدون أي نافذة أو خروج من التطبيق!
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                takeSilentScreenshot()
+            }
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        // تفعيل استقبال ضغطة اختصار إمكانية الوصول (Accessibility Shortcut / Button)
+        accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        try {
+            accessibilityButtonController.unregisterAccessibilityButtonCallback(buttonCallback)
+        } catch (_: Exception) {}
         instance = null
         return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val pkg = event.packageName?.toString() ?: return
-            if (pkg !in IGNORED_PACKAGES) {
-                lastForegroundPackage = pkg
+        // لو عملت في Modes & Routines أكشن "Show custom notification" مكتوب فيه كلمة clipshot
+        if (event?.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
+            val text = event.text?.joinToString(" ")?.lowercase() ?: ""
+            if (text.contains("clipshot")) {
+                captureNow(delayMs = 150L)
             }
         }
     }
