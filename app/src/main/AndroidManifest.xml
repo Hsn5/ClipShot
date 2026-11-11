@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:icon="@android:drawable/ic_menu_camera"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+        <!-- Main Setup Activity (Dark Mode UI)
+             Moved to its own dedicated taskAffinity (.setup) so Modes & Routines launching the default
+             package task NEVER wakes up or closes MainActivity's task! -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:taskAffinity="com.example.clipshot.setup"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
+        </activity>
+
+        <!-- Zero-Exit Trigger Activity for Samsung Modes & Routines / App Shortcuts:
+             1. Uses Theme.NoDisplay so Android WindowManager NEVER creates a visible window or switches tasks!
+             2. Additionally restores the exact foreground app if OneUI attempts any focus change. -->
+        <activity
+            android:name=".TriggerScreenshotActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:stateNotNeeded="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="com.example.clipshot.ACTION_CAPTURE_TO_CLIPBOARD" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- Pure Background Service Trigger -->
+        <service
+            android:name=".TriggerScreenshotService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.clipshot.ACTION_CAPTURE_TO_CLIPBOARD" />
+                <action android:name="com.example.clipshot.SERVICE_CAPTURE_TO_CLIPBOARD" />
+            </intent-filter>
+        </service>
+
+        <!-- Pure BroadcastReceiver Trigger -->
+        <receiver
+            android:name=".TriggerScreenshotReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.clipshot.ACTION_CAPTURE_TO_CLIPBOARD" />
+                <action android:name="com.example.clipshot.BROADCAST_CAPTURE_TO_CLIPBOARD" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Accessibility Service for Silent HardwareBuffer Screenshot Capture & OneUI Notification Trigger -->
+        <service
+            android:name=".ScreenshotAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- Quick Settings Tile Service -->
+        <service
+            android:name=".ScreenshotTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_menu_camera"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- FileProvider for Internal Cache URI Sharing to Clipboard -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+
+</manifest>

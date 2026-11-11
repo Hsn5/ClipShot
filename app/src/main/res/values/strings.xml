@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ClipShot</string>
+    <string name="accessibility_service_label">ClipShot Silent Capture</string>
+    <string name="accessibility_service_description">Captures the screen directly to the clipboard in the background without saving images to the gallery.</string>
+    <string name="shortcut_short_label">Copy Screen</string>
+    <string name="shortcut_long_label">Copy Screenshot to Clipboard</string>
+    <string name="tile_label">ClipShot</string>
+</resources>

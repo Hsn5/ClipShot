@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="capture_to_clipboard"
+        android:enabled="true"
+        android:icon="@android:drawable/ic_menu_camera"
+        android:shortcutShortLabel="@string/shortcut_short_label"
+        android:shortcutLongLabel="@string/shortcut_long_label">
+        <intent
+            android:action="com.example.clipshot.ACTION_CAPTURE_TO_CLIPBOARD"
+            android:targetPackage="com.example.clipshot"
+            android:targetClass="com.example.clipshot.TriggerScreenshotActivity" />
+    </shortcut>
+</shortcuts>
