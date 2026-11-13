@@ -2,26 +2,23 @@ package com.example.clipshot
 
 import android.accessibilityservice.AccessibilityButtonController
 import android.accessibilityservice.AccessibilityService
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Display
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.widget.Toast
 import androidx.annotation.RequiresApi
-import androidx.core.content.FileProvider
-import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.Executors
 
 class ScreenshotAccessibilityService : AccessibilityService() {
 
     companion object {
+        const val ACTION_VAULT_UPDATED = "com.example.clipshot.ACTION_VAULT_UPDATED"
+
         var instance: ScreenshotAccessibilityService? = null
             private set
 
@@ -41,9 +38,18 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         }
     }
 
+    private val handler = Handler(Looper.getMainLooper())
+    private var volumeDownLongPressTriggered = false
+
+    private val longPressRunnable = Runnable {
+        volumeDownLongPressTriggered = true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            takeSilentScreenshot()
+        }
+    }
+
     private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
         override fun onClicked(controller: AccessibilityButtonController?) {
-            // يشتغل فوراً عند الضغط على اختصار Accessibility بدون أي نافذة أو خروج من التطبيق!
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 takeSilentScreenshot()
             }
@@ -53,8 +59,11 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        // تفعيل استقبال ضغطة اختصار إمكانية الوصول (Accessibility Shortcut / Button)
-        accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback)
+        // Clean up any expired 24h screenshots when service starts
+        ScreenshotVaultManager.purgeExpired(applicationContext)
+        try {
+            accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback)
+        } catch (_: Exception) {}
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -65,15 +74,24 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         return super.onUnbind(intent)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // لو عملت في Modes & Routines أكشن "Show custom notification" مكتوب فيه كلمة clipshot
-        if (event?.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
-            val text = event.text?.joinToString(" ")?.lowercase() ?: ""
-            if (text.contains("clipshot")) {
-                captureNow(delayMs = 150L)
+    override fun onKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                volumeDownLongPressTriggered = false
+                handler.postDelayed(longPressRunnable, 450L)
+                return false
+            } else if (event.action == KeyEvent.ACTION_UP) {
+                handler.removeCallbacks(longPressRunnable)
+                if (volumeDownLongPressTriggered) {
+                    volumeDownLongPressTriggered = false
+                    return true
+                }
             }
         }
+        return super.onKeyEvent(event)
     }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
     override fun onInterrupt() {}
 
@@ -96,8 +114,14 @@ class ScreenshotAccessibilityService : AccessibilityService() {
                         hardwareBuffer.close()
 
                         if (softwareBitmap != null) {
-                            copyBitmapToClipboard(softwareBitmap)
+                            ScreenshotVaultManager.saveAndCopyToClipboard(
+                                applicationContext,
+                                softwareBitmap
+                            )
                             softwareBitmap.recycle()
+
+                            sendBroadcast(Intent(ACTION_VAULT_UPDATED).setPackage(packageName))
+                            showToast("Copied to clipboard & saved to 24h Vault 📋")
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
@@ -110,31 +134,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
                 }
             }
         )
-    }
-
-    private fun copyBitmapToClipboard(bitmap: Bitmap) {
-        val cacheFolder = File(cacheDir, "screenshots")
-        if (!cacheFolder.exists()) cacheFolder.mkdirs()
-
-        File(cacheFolder, ".nomedia").createNewFile()
-
-        val tempFile = File(cacheFolder, "clipboard_latest.png")
-        FileOutputStream(tempFile).use { out ->
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)
-            out.flush()
-        }
-
-        val uri = FileProvider.getUriForFile(
-            this,
-            "${applicationContext.packageName}.fileprovider",
-            tempFile
-        )
-
-        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val clip = ClipData.newUri(contentResolver, "Screenshot", uri)
-        clipboard.setPrimaryClip(clip)
-
-        showToast("Screenshot copied to clipboard")
     }
 
     private fun showToast(message: String) {
