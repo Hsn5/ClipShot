@@ -50,7 +50,7 @@ class MainActivity : Activity() {
         }
 
         val titleText = TextView(this).apply {
-            text = "ClipShot"
+            text = "ClipShot v6.0"
             textSize = 28f
             setTextColor(Color.parseColor("#FFFFFF"))
             gravity = Gravity.CENTER
@@ -253,7 +253,6 @@ class MainActivity : Activity() {
             }
         }
 
-        // Thumbnail Preview
         val thumbView = ImageView(this).apply {
             layoutParams = LinearLayout.LayoutParams(160, 240).apply {
                 rightMargin = 28
@@ -265,13 +264,12 @@ class MainActivity : Activity() {
         val file = ScreenshotVaultManager.getFileForItem(this, item)
         if (file.exists()) {
             val opts = BitmapFactory.Options().apply {
-                inSampleSize = 4 // Fast lightweight thumbnail decoding
+                inSampleSize = 4
             }
             val thumbBitmap = BitmapFactory.decodeFile(file.absolutePath, opts)
             thumbView.setImageBitmap(thumbBitmap)
         }
 
-        // Right Column: Metadata + Action Buttons
         val infoColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -297,7 +295,6 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
         }
 
-        // 1. Copy Button
         val copyBtn = Button(this).apply {
             text = "Copy"
             isAllCaps = false
@@ -319,7 +316,6 @@ class MainActivity : Activity() {
             }
         }
 
-        // 2. Pin / Unpin Button (Prevents 24h Auto-Delete)
         val pinBtn = Button(this).apply {
             text = if (item.isPinned) "Pinned 📌" else "Pin 📌"
             isAllCaps = false
@@ -345,7 +341,6 @@ class MainActivity : Activity() {
             }
         }
 
-        // 3. Delete Button
         val delBtn = Button(this).apply {
             text = "✕"
             isAllCaps = false
