@@ -1,4 +1,3 @@
-```kotlin
 package com.example.clipshot
 
 import android.accessibilityservice.AccessibilityButtonController
@@ -162,4 +161,3 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         }
     }
 }
-```
