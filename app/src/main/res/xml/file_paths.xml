@@ -3,4 +3,7 @@
     <cache-path
         name="clipboard_cache"
         path="screenshots/" />
+    <files-path
+        name="private_vault"
+        path="vault/" />
 </paths>
