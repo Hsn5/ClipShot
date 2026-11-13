@@ -1,3 +1,4 @@
+```kotlin
 package com.example.clipshot
 
 import android.accessibilityservice.AccessibilityButtonController
@@ -40,6 +41,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var volumeDownLongPressTriggered = false
+    private var lastNotificationTriggerTime = 0L
 
     private val longPressRunnable = Runnable {
         volumeDownLongPressTriggered = true
@@ -59,7 +61,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        // Clean up any expired 24h screenshots when service starts
         ScreenshotVaultManager.purgeExpired(applicationContext)
         try {
             accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback)
@@ -74,6 +75,9 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         return super.onUnbind(intent)
     }
 
+    /**
+     * 1. Volume Down Long-Press Trigger (450ms)
+     */
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
@@ -91,7 +95,23 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         return super.onKeyEvent(event)
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    /**
+     * 2. Custom Notification Trigger (for Samsung Modes & Routines -> Show custom notification "clipshot")
+     */
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
+            val text = event.text?.joinToString(" ")?.lowercase() ?: ""
+            val contentDesc = event.contentDescription?.toString()?.lowercase() ?: ""
+            if (text.contains("clipshot") || contentDesc.contains("clipshot")) {
+                val now = System.currentTimeMillis()
+                // Debounce so a single notification doesn't trigger twice
+                if (now - lastNotificationTriggerTime > 1500L) {
+                    lastNotificationTriggerTime = now
+                    captureNow(delayMs = 150L)
+                }
+            }
+        }
+    }
 
     override fun onInterrupt() {}
 
@@ -142,3 +162,4 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         }
     }
 }
+```
