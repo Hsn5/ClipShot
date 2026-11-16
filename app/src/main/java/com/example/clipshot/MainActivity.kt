@@ -13,6 +13,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -42,7 +43,8 @@ data class VaultItem(
     val id: String,
     val fileName: String,
     val timestamp: Long,
-    var isPinned: Boolean
+    var isPinned: Boolean,
+    val sourceUrl: String? = null
 ) {
     fun getRemainingMillis(now: Long = System.currentTimeMillis()): Long {
         val expiry = timestamp + TimeUnit.HOURS.toMillis(24)
@@ -109,7 +111,7 @@ object ScreenshotVaultManager {
     }
 
     @Synchronized
-    fun saveAndCopyToClipboard(context: Context, bitmap: Bitmap): VaultItem {
+    fun saveAndCopyToClipboard(context: Context, bitmap: Bitmap, sourceUrl: String? = null): VaultItem {
         purgeExpired(context)
 
         val now = System.currentTimeMillis()
@@ -127,7 +129,8 @@ object ScreenshotVaultManager {
             id = id,
             fileName = fileName,
             timestamp = now,
-            isPinned = false
+            isPinned = false,
+            sourceUrl = sourceUrl
         )
 
         val items = loadRawItems(context).toMutableList()
@@ -188,10 +191,11 @@ object ScreenshotVaultManager {
         return true
     }
 
-    /**
-     * Saves the screenshot to the device's Gallery (Pictures/ClipShot) via MediaStore.
-     * Requires zero storage permissions on Android 11+ (API 30+).
-     */
+    fun copyTextToClipboard(context: Context, text: String) {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Web URL", text))
+    }
+
     fun saveToGallery(context: Context, item: VaultItem): Boolean {
         val file = getFileForItem(context, item)
         if (!file.exists()) return false
@@ -250,7 +254,8 @@ object ScreenshotVaultManager {
                         id = obj.getString("id"),
                         fileName = obj.getString("fileName"),
                         timestamp = obj.getLong("timestamp"),
-                        isPinned = obj.optBoolean("isPinned", false)
+                        isPinned = obj.optBoolean("isPinned", false),
+                        sourceUrl = obj.optString("sourceUrl", "").ifEmpty { null }
                     )
                 )
             }
@@ -266,6 +271,7 @@ object ScreenshotVaultManager {
                 put("fileName", item.fileName)
                 put("timestamp", item.timestamp)
                 put("isPinned", item.isPinned)
+                if (item.sourceUrl != null) put("sourceUrl", item.sourceUrl)
             }
             arr.put(obj)
         }
@@ -303,7 +309,7 @@ class MainActivity : Activity() {
         }
 
         val titleText = TextView(this).apply {
-            text = "ClipShot"
+            text = "ClipShot v7.0"
             textSize = 28f
             setTextColor(Color.parseColor("#FFFFFF"))
             gravity = Gravity.CENTER
@@ -311,7 +317,7 @@ class MainActivity : Activity() {
         }
 
         val subTitleText = TextView(this).apply {
-            text = "Silent Clipboard & 24-Hour Private Vault"
+            text = "Crop • Web URL • 24-Hour Private Vault"
             textSize = 14f
             setTextColor(Color.parseColor("#9E9E9E"))
             gravity = Gravity.CENTER
@@ -351,7 +357,7 @@ class MainActivity : Activity() {
         }
 
         val testBtn = Button(this).apply {
-            text = "Capture Now"
+            text = "Capture & Crop"
             isAllCaps = false
             textSize = 14f
             setTextColor(Color.parseColor("#FFFFFF"))
@@ -362,7 +368,7 @@ class MainActivity : Activity() {
             }
             setOnClickListener {
                 if (ScreenshotAccessibilityService.instance != null) {
-                    ScreenshotAccessibilityService.captureNow(delayMs = 200L)
+                    ScreenshotAccessibilityService.captureNow(delayMs = 200L, openCropOverlay = true)
                 } else {
                     startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 }
@@ -403,7 +409,7 @@ class MainActivity : Activity() {
         vaultHeaderRow.addView(clearUnpinnedBtn)
 
         val vaultHintText = TextView(this).apply {
-            text = "Tap any thumbnail or 'View' to inspect full-screen. Unpinned shots auto-delete after 24h unless pinned or saved to Gallery."
+            text = "Triggers: 'clipshot' notification (Crop/Full) • 'clipurl' notification (Web Link only) • Hold Volume Down • Quick Tile."
             textSize = 12f
             setTextColor(Color.parseColor("#8B949E"))
             setPadding(0, 0, 0, 24)
@@ -453,7 +459,7 @@ class MainActivity : Activity() {
     private fun updateServiceStatus() {
         val isActive = ScreenshotAccessibilityService.instance != null
         if (isActive) {
-            statusText.text = "✅ Service Active (Notification 'clipshot' • Hold Vol Down • Quick Tile)"
+            statusText.text = "✅ Service Active (Crop • Web URL • Hold Vol Down • Quick Tile)"
             statusText.setTextColor(Color.parseColor("#4CAF50"))
         } else {
             statusText.text = "⚠️ Service NOT enabled. Tap 'Accessibility' to enable ClipShot."
@@ -469,7 +475,8 @@ class MainActivity : Activity() {
 
         if (items.isEmpty()) {
             val emptyView = TextView(this).apply {
-                text = "No screenshots in vault yet.\nCapture a screenshot and it will appear here for 24 hours."
+                text = "No screenshots in vault yet.
+Capture a screenshot and it will appear here for 24 hours."
                 textSize = 14f
                 setTextColor(Color.parseColor("#6E7681"))
                 gravity = Gravity.CENTER
@@ -543,10 +550,36 @@ class MainActivity : Activity() {
                 if (item.isPinned) Color.parseColor("#E3B341")
                 else Color.parseColor("#8B949E")
             )
-            setPadding(0, 6, 0, 16)
+            setPadding(0, 6, 0, 12)
         }
 
-        // Row 1: View | Copy | Save to Gallery
+        infoColumn.addView(timeText)
+        infoColumn.addView(expiryText)
+
+        // Show Source URL pill if captured from a browser
+        if (!item.sourceUrl.isNullOrBlank()) {
+            val urlBtn = Button(this).apply {
+                text = "🔗 Copy URL: ${item.sourceUrl.removePrefix("https://").removePrefix("http://").take(26)}..."
+                isAllCaps = false
+                textSize = 11f
+                setTextColor(Color.parseColor("#58A6FF"))
+                background = roundedBg("#131D2E", "#1F6FEB", 12f)
+                setPadding(16, 8, 16, 8)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = 12
+                }
+                setOnClickListener {
+                    ScreenshotVaultManager.copyTextToClipboard(this@MainActivity, item.sourceUrl)
+                    Toast.makeText(this@MainActivity, "URL copied to clipboard 🔗", Toast.LENGTH_SHORT).show()
+                }
+            }
+            infoColumn.addView(urlBtn)
+        }
+
+        // Row 1: View | Copy | Save
         val row1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -668,8 +701,6 @@ class MainActivity : Activity() {
         row2.addView(pinBtn)
         row2.addView(delBtn)
 
-        infoColumn.addView(timeText)
-        infoColumn.addView(expiryText)
         infoColumn.addView(row1)
         infoColumn.addView(row2)
 
@@ -678,9 +709,6 @@ class MainActivity : Activity() {
         return card
     }
 
-    /**
-     * Full-screen Dark Mode in-app viewer with quick Copy, Save to Gallery, Pin, and Close controls.
-     */
     private fun showFullScreenViewer(item: VaultItem, dateFormat: SimpleDateFormat) {
         val file = ScreenshotVaultManager.getFileForItem(this, item)
         if (!file.exists()) {
@@ -702,12 +730,11 @@ class MainActivity : Activity() {
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
             scaleType = ImageView.ScaleType.FIT_CENTER
-            setPadding(16, 120, 16, 180)
+            setPadding(16, 120, 16, 200)
             setImageBitmap(BitmapFactory.decodeFile(file.absolutePath))
             setOnClickListener { dialog.dismiss() }
         }
 
-        // Top Bar: Timestamp + Close
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -740,16 +767,48 @@ class MainActivity : Activity() {
         topBar.addView(titleLabel)
         topBar.addView(closeBtn)
 
-        // Bottom Bar: Copy | Save to Gallery | Pin
-        val bottomBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER
+        val bottomWrapper = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#CC121212"))
-            setPadding(24, 24, 24, 36)
+            setPadding(24, 20, 24, 36)
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM
+            )
+        }
+
+        if (!item.sourceUrl.isNullOrBlank()) {
+            val urlActionBtn = Button(this).apply {
+                text = "🌐 Open / Copy URL: ${item.sourceUrl.take(40)}"
+                isAllCaps = false
+                textSize = 12f
+                setTextColor(Color.parseColor("#58A6FF"))
+                background = roundedBg("#131D2E", "#1F6FEB", 16f)
+                setPadding(24, 12, 24, 12)
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = 14
+                }
+                setOnClickListener {
+                    ScreenshotVaultManager.copyTextToClipboard(this@MainActivity, item.sourceUrl)
+                    Toast.makeText(this@MainActivity, "URL copied 📋", Toast.LENGTH_SHORT).show()
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(item.sourceUrl)))
+                    } catch (_: Exception) {}
+                }
+            }
+            bottomWrapper.addView(urlActionBtn)
+        }
+
+        val bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
             )
         }
 
@@ -816,10 +875,11 @@ class MainActivity : Activity() {
         bottomBar.addView(viewerCopyBtn)
         bottomBar.addView(viewerSaveBtn)
         bottomBar.addView(viewerPinBtn)
+        bottomWrapper.addView(bottomBar)
 
         container.addView(fullImage)
         container.addView(topBar)
-        container.addView(bottomBar)
+        container.addView(bottomWrapper)
 
         dialog.setContentView(container)
         dialog.show()
