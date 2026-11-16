@@ -426,7 +426,7 @@ class MainActivity : Activity() {
         vaultHeaderRow.addView(clearUnpinnedBtn)
 
         val vaultHintText = TextView(this).apply {
-            text = "Triggers: 'clipshot' notification (Crop/Full) • 'clipurl' notification (Web Link only) • Hold Volume Down • Quick Tile."
+            text = "Triggers: 'clipshot' notification (Crop/Full) • 'clipurl' notification (Web Link only) • Double_tab Volume Down • Quick Tile."
             textSize = 12f
             setTextColor(Color.parseColor("#8B949E"))
             setPadding(0, 0, 0, 24)
@@ -476,7 +476,7 @@ class MainActivity : Activity() {
     private fun updateServiceStatus() {
         val isActive = ScreenshotAccessibilityService.instance != null
         if (isActive) {
-            statusText.text = "✅ Service Active (Crop • Web URL • Hold Vol Down • Quick Tile)"
+            statusText.text = "✅ Service Active (Crop • Web URL • Double_tab Vol Down • Quick Tile)"
             statusText.setTextColor(Color.parseColor("#4CAF50"))
         } else {
             statusText.text = "⚠️ Service NOT enabled. Tap 'Accessibility' to enable ClipShot."
