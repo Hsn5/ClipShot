@@ -58,15 +58,8 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private var volumeDownLongPressTriggered = false
+    private var lastVolumeDownTapTime = 0L
     private var lastNotificationTriggerTime = 0L
-
-    private val longPressRunnable = Runnable {
-        volumeDownLongPressTriggered = true
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            takeSilentScreenshot(openCropOverlay = true)
-        }
-    }
 
     private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
         override fun onClicked(controller: AccessibilityButtonController?) {
@@ -93,18 +86,24 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         return super.onUnbind(intent)
     }
 
+    /**
+     * Double-Tap Volume Down Trigger (within 320ms).
+     * Single tap and holding Volume Down work completely normally!
+     */
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                volumeDownLongPressTriggered = false
-                handler.postDelayed(longPressRunnable, 450L)
-                return false
-            } else if (event.action == KeyEvent.ACTION_UP) {
-                handler.removeCallbacks(longPressRunnable)
-                if (volumeDownLongPressTriggered) {
-                    volumeDownLongPressTriggered = false
-                    return true
+        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN &&
+            event.action == KeyEvent.ACTION_DOWN &&
+            event.repeatCount == 0
+        ) {
+            val now = System.currentTimeMillis()
+            if (now - lastVolumeDownTapTime <= 320L) {
+                lastVolumeDownTapTime = 0L
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    takeSilentScreenshot(openCropOverlay = true)
                 }
+                return true
+            } else {
+                lastVolumeDownTapTime = now
             }
         }
         return super.onKeyEvent(event)
@@ -135,7 +134,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
 
     @RequiresApi(Build.VERSION_CODES.R)
     fun takeSilentScreenshot(openCropOverlay: Boolean = true) {
-        // Extract browser URL BEFORE displaying any overlay
         val detectedUrl = extractCurrentBrowserUrl()
         val executor = Executors.newSingleThreadExecutor()
 
@@ -206,9 +204,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         showToast(msg)
     }
 
-    /**
-     * Scans the active browser window tree for an address bar URL (Chrome, Samsung Internet, Edge, Firefox, Brave).
-     */
     fun extractCurrentBrowserUrl(): String? {
         val root = try {
             rootInActiveWindow
@@ -234,7 +229,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Fallback recursive scan (bounded depth) for any EditText/TextView containing a web URL
         return scanNodeForUrl(root, depth = 0)
     }
 
