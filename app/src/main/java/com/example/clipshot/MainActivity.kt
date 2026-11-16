@@ -893,3 +893,4 @@ class MainActivity : Activity() {
         }
     }
 }
+startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
