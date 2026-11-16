@@ -338,33 +338,49 @@ class MainActivity : Activity() {
 
         val buttonsRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            weightSum = 2f
+            weightSum = 3f
         }
 
         val enableBtn = Button(this).apply {
             text = "Accessibility"
             isAllCaps = false
-            textSize = 14f
+            textSize = 13f
             setTextColor(Color.parseColor("#FFFFFF"))
             background = roundedBg("#238636", "#2EA043", 20f)
-            setPadding(20, 24, 20, 24)
+            setPadding(12, 24, 12, 24)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                rightMargin = 12
+                rightMargin = 8
             }
             setOnClickListener {
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             }
         }
 
-        val testBtn = Button(this).apply {
-            text = "Capture & Crop"
+        val notifBtn = Button(this).apply {
+            text = "Notif Access"
             isAllCaps = false
-            textSize = 14f
+            textSize = 13f
+            setTextColor(Color.parseColor("#FFFFFF"))
+            background = roundedBg("#9E6A03", "#D29922", 20f)
+            setPadding(12, 24, 12, 24)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                leftMargin = 4
+                rightMargin = 4
+            }
+            setOnClickListener {
+                startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+            }
+        }
+
+        val testBtn = Button(this).apply {
+            text = "Capture"
+            isAllCaps = false
+            textSize = 13f
             setTextColor(Color.parseColor("#FFFFFF"))
             background = roundedBg("#1F6FEB", "#388BFD", 20f)
-            setPadding(20, 24, 20, 24)
+            setPadding(12, 24, 12, 24)
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                leftMargin = 12
+                leftMargin = 8
             }
             setOnClickListener {
                 if (ScreenshotAccessibilityService.instance != null) {
@@ -376,6 +392,7 @@ class MainActivity : Activity() {
         }
 
         buttonsRow.addView(enableBtn)
+        buttonsRow.addView(notifBtn)
         buttonsRow.addView(testBtn)
 
         val vaultHeaderRow = LinearLayout(this).apply {
@@ -475,7 +492,7 @@ class MainActivity : Activity() {
 
         if (items.isEmpty()) {
             val emptyView = TextView(this).apply {
-               text = "No screenshots in vault yet.\nCapture a screenshot and it will appear here for 24 hours."
+                text = "No screenshots in vault yet.\nCapture a screenshot and it will appear here for 24 hours."
                 textSize = 14f
                 setTextColor(Color.parseColor("#6E7681"))
                 gravity = Gravity.CENTER
@@ -555,7 +572,6 @@ class MainActivity : Activity() {
         infoColumn.addView(timeText)
         infoColumn.addView(expiryText)
 
-        // Show Source URL pill if captured from a browser
         if (!item.sourceUrl.isNullOrBlank()) {
             val urlBtn = Button(this).apply {
                 text = "🔗 Copy URL: ${item.sourceUrl.removePrefix("https://").removePrefix("http://").take(26)}..."
@@ -578,7 +594,6 @@ class MainActivity : Activity() {
             infoColumn.addView(urlBtn)
         }
 
-        // Row 1: View | Copy | Save
         val row1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -650,7 +665,6 @@ class MainActivity : Activity() {
         row1.addView(copyBtn)
         row1.addView(saveBtn)
 
-        // Row 2: Pin | Delete
         val row2 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
@@ -893,4 +907,3 @@ class MainActivity : Activity() {
         }
     }
 }
-startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
