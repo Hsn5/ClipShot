@@ -8,6 +8,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -58,8 +59,26 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private var lastVolumeDownTapTime = 0L
+    private var pendingSingleTap = false
+    private var isVolumeDownHeld = false
     private var lastNotificationTriggerTime = 0L
+
+    private val holdRepeatRunnable = object : Runnable {
+        override fun run() {
+            if (isVolumeDownHeld) {
+                lowerVolume()
+                handler.postDelayed(this, 80L)
+            }
+        }
+    }
+
+    private val singleTapRunnable = Runnable {
+        pendingSingleTap = false
+        lowerVolume()
+        if (isVolumeDownHeld) {
+            handler.postDelayed(holdRepeatRunnable, 120L)
+        }
+    }
 
     private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
         override fun onClicked(controller: AccessibilityButtonController?) {
@@ -87,26 +106,49 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Double-Tap Volume Down Trigger (within 320ms).
-     * Single tap and holding Volume Down work completely normally!
+     * Debounced Double-Tap Volume Down (within 260ms):
+     * Suppresses the 1st tap briefly so the system volume bar NEVER appears on a double-tap!
+     * If no 2nd tap arrives within 260ms, lowers volume normally via AudioManager.
      */
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN &&
-            event.action == KeyEvent.ACTION_DOWN &&
-            event.repeatCount == 0
-        ) {
-            val now = System.currentTimeMillis()
-            if (now - lastVolumeDownTapTime <= 320L) {
-                lastVolumeDownTapTime = 0L
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    takeSilentScreenshot(openCropOverlay = true)
+        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                if (event.repeatCount == 0) {
+                    if (pendingSingleTap) {
+                        handler.removeCallbacks(singleTapRunnable)
+                        handler.removeCallbacks(holdRepeatRunnable)
+                        pendingSingleTap = false
+                        isVolumeDownHeld = false
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                            takeSilentScreenshot(openCropOverlay = true)
+                        }
+                        return true
+                    } else {
+                        isVolumeDownHeld = true
+                        pendingSingleTap = true
+                        handler.postDelayed(singleTapRunnable, 260L)
+                        return true
+                    }
                 }
                 return true
-            } else {
-                lastVolumeDownTapTime = now
+            } else if (event.action == KeyEvent.ACTION_UP) {
+                isVolumeDownHeld = false
+                handler.removeCallbacks(holdRepeatRunnable)
+                return true
             }
         }
         return super.onKeyEvent(event)
+    }
+
+    private fun lowerVolume() {
+        try {
+            val audio = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audio.adjustSuggestedStreamVolume(
+                AudioManager.ADJUST_LOWER,
+                AudioManager.USE_DEFAULT_STREAM_TYPE,
+                AudioManager.FLAG_SHOW_UI
+            )
+        } catch (_: Exception) {}
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
