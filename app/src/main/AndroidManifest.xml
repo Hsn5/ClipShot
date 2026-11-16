@@ -1,18 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
-        android:icon="@android:drawable/ic_menu_camera"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
 
-        <!-- Main Setup Activity (Dark Mode UI)
-             Moved to its own dedicated taskAffinity (.setup) so Modes & Routines launching the default
-             package task NEVER wakes up or closes MainActivity's task! -->
+        <!-- Main Setup & 24h Clipboard History Vault Activity (Dark Mode UI) -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -29,9 +26,7 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
-        <!-- Zero-Exit Trigger Activity for Samsung Modes & Routines / App Shortcuts:
-             1. Uses Theme.NoDisplay so Android WindowManager NEVER creates a visible window or switches tasks!
-             2. Additionally restores the exact foreground app if OneUI attempts any focus change. -->
+        <!-- Zero-Exit Trigger Activity for App Shortcuts -->
         <activity
             android:name=".TriggerScreenshotActivity"
             android:exported="true"
@@ -65,7 +60,7 @@
             </intent-filter>
         </receiver>
 
-        <!-- Accessibility Service for Silent HardwareBuffer Screenshot Capture & OneUI Notification Trigger -->
+        <!-- Accessibility Service: Silent Capture, Region Crop Overlay, Web URL Extractor -->
         <service
             android:name=".ScreenshotAccessibilityService"
             android:exported="true"
@@ -78,20 +73,12 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
-<service
-    android:name=".ClipshotNotificationListener"
-    android:exported="true"
-    android:label="ClipShot"
-    android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-    <intent-filter>
-        <action android:name="android.service.notification.NotificationListenerService" />
-    </intent-filter>
-</service>
+
         <!-- Quick Settings Tile Service -->
         <service
             android:name=".ScreenshotTileService"
             android:exported="true"
-            android:icon="@android:drawable/ic_menu_camera"
+            android:icon="@drawable/ic_tile_clipshot"
             android:label="@string/tile_label"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
@@ -99,7 +86,7 @@
             </intent-filter>
         </service>
 
-        <!-- FileProvider for Internal Cache URI Sharing to Clipboard -->
+        <!-- FileProvider for Internal Private Vault URI Sharing (Zero Gallery Pollution) -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
