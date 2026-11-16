@@ -475,8 +475,7 @@ class MainActivity : Activity() {
 
         if (items.isEmpty()) {
             val emptyView = TextView(this).apply {
-                text = "No screenshots in vault yet.
-Capture a screenshot and it will appear here for 24 hours."
+               text = "No screenshots in vault yet.\nCapture a screenshot and it will appear here for 24 hours."
                 textSize = 14f
                 setTextColor(Color.parseColor("#6E7681"))
                 gravity = Gravity.CENTER
