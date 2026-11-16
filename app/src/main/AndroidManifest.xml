@@ -60,6 +60,18 @@
             </intent-filter>
         </receiver>
 
+        <!-- Notification Listener Service for Reliable Modes & Routines Triggers -->
+        <service
+            android:name=".ClipShotNotificationListener"
+            android:exported="true"
+            android:label="ClipShot Notification Trigger"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        
         <!-- Accessibility Service: Silent Capture, Region Crop Overlay, Web URL Extractor -->
         <service
             android:name=".ScreenshotAccessibilityService"
