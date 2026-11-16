@@ -2,6 +2,7 @@ package com.example.clipshot
 
 import android.accessibilityservice.AccessibilityButtonController
 import android.accessibilityservice.AccessibilityService
+import android.app.Notification
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
@@ -96,18 +97,25 @@ class ScreenshotAccessibilityService : AccessibilityService() {
 
     /**
      * 2. Custom Notification Trigger (for Samsung Modes & Routines -> Show custom notification "clipshot")
+     * - Ignores events originating from ClipShot itself.
+     * - Requires parcelableData to be a real status bar Notification (ignores Toasts/popups completely!).
      */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType == AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) {
-            val text = event.text?.joinToString(" ")?.lowercase() ?: ""
-            val contentDesc = event.contentDescription?.toString()?.lowercase() ?: ""
-            if (text.contains("clipshot") || contentDesc.contains("clipshot")) {
-                val now = System.currentTimeMillis()
-                // Debounce so a single notification doesn't trigger twice
-                if (now - lastNotificationTriggerTime > 1500L) {
-                    lastNotificationTriggerTime = now
-                    captureNow(delayMs = 150L)
-                }
+        if (event?.eventType != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) return
+
+        // Ignore all events from ClipShot itself (prevents Toast/UI feedback loops)
+        if (event.packageName?.toString() == packageName) return
+
+        // Only react to real status bar Notifications, never Toast messages
+        if (event.parcelableData !is Notification) return
+
+        val text = event.text?.joinToString(" ")?.lowercase() ?: ""
+        val contentDesc = event.contentDescription?.toString()?.lowercase() ?: ""
+        if (text.contains("clipshot") || contentDesc.contains("clipshot")) {
+            val now = System.currentTimeMillis()
+            if (now - lastNotificationTriggerTime > 2000L) {
+                lastNotificationTriggerTime = now
+                captureNow(delayMs = 150L)
             }
         }
     }
