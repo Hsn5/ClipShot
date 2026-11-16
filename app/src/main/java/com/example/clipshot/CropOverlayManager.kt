@@ -4,11 +4,13 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.view.Gravity
@@ -25,8 +27,9 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Floating TYPE_ACCESSIBILITY_OVERLAY crop editor.
- * Runs directly on top of the active app with ZERO Activity launch and ZERO Home Screen exit!
+ * Floating TYPE_ACCESSIBILITY_OVERLAY crop editor styled like Circle to Search:
+ * - Rounded glowing gradient frame with corner arcs and edge pill handles.
+ * - Smooth resizing from all 4 edges (sides) AND all 4 corners, plus dragging from inside.
  */
 class CropOverlayManager(
     private val context: Context,
@@ -60,7 +63,7 @@ class CropOverlayManager(
 
         // Top Instruction Pill
         val topHint = TextView(context).apply {
-            text = "Drag to select area • Tap Full for entire screen"
+            text = "Drag corners, edges, or draw anywhere"
             textSize = 13f
             setTextColor(Color.parseColor("#F0F6FC"))
             background = roundedPill("#CC161B22", "#388BFD")
@@ -91,7 +94,6 @@ class CropOverlayManager(
             }
         }
 
-        // Optional URL Pill when a browser page URL is detected
         if (!detectedUrl.isNullOrBlank()) {
             val urlBtn = Button(context).apply {
                 text = "🔗 Copy Web Link: ${detectedUrl.take(36)}${if (detectedUrl.length > 36) "..." else ""}"
@@ -262,16 +264,31 @@ class CropOverlayManager(
         }
         private val clearPaint = Paint().apply {
             xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-        }
-        private val borderPaint = Paint().apply {
-            color = Color.parseColor("#388BFD")
-            style = Paint.Style.STROKE
-            strokeWidth = 5f
             isAntiAlias = true
         }
-        private val handlePaint = Paint().apply {
-            color = Color.parseColor("#3FB950")
-            style = Paint.Style.FILL
+        private val glowPaint = Paint().apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 14f
+            alpha = 90
+            isAntiAlias = true
+        }
+        private val borderPaint = Paint().apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 5.5f
+            isAntiAlias = true
+        }
+        private val cornerArcPaint = Paint().apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = 9f
+            strokeCap = Paint.Cap.ROUND
+            isAntiAlias = true
+        }
+        private val edgePillPaint = Paint().apply {
+            color = Color.parseColor("#E6FFFFFF")
+            style = Paint.Style.STROKE
+            strokeWidth = 8f
+            strokeCap = Paint.Cap.ROUND
             isAntiAlias = true
         }
 
@@ -289,9 +306,16 @@ class CropOverlayManager(
             private const val MODE_TR = 3
             private const val MODE_BL = 4
             private const val MODE_BR = 5
-            private const val MODE_NEW = 6
-            private const val HANDLE_RADIUS = 48f
-            private const val MIN_SIZE = 100f
+            private const val MODE_LEFT = 6
+            private const val MODE_TOP = 7
+            private const val MODE_RIGHT = 8
+            private const val MODE_BOTTOM = 9
+            private const val MODE_NEW = 10
+
+            private const val CORNER_RADIUS = 52f
+            private const val CORNER_HIT = 60f
+            private const val EDGE_HIT = 52f
+            private const val MIN_SIZE = 120f
         }
 
         init {
@@ -300,9 +324,25 @@ class CropOverlayManager(
 
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
             super.onSizeChanged(w, h, oldw, oldh)
-            if (!initialized && w > 0 && h > 0) {
-                cropRect.set(w * 0.12f, h * 0.22f, w * 0.88f, h * 0.68f)
-                initialized = true
+            if (w > 0 && h > 0) {
+                val gradient = LinearGradient(
+                    0f, 0f, w.toFloat(), h.toFloat(),
+                    intArrayOf(
+                        Color.parseColor("#4285F4"),
+                        Color.parseColor("#388BFD"),
+                        Color.parseColor("#3FB950"),
+                        Color.parseColor("#A371F7")
+                    ),
+                    null,
+                    Shader.TileMode.CLAMP
+                )
+                borderPaint.shader = gradient
+                glowPaint.shader = gradient
+
+                if (!initialized) {
+                    cropRect.set(w * 0.10f, h * 0.24f, w * 0.90f, h * 0.64f)
+                    initialized = true
+                }
             }
         }
 
@@ -310,15 +350,55 @@ class CropOverlayManager(
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
+            // 1. Darken outside area
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dimPaint)
-            canvas.drawRect(cropRect, clearPaint)
-            canvas.drawRect(cropRect, borderPaint)
 
-            val r = 14f
-            canvas.drawCircle(cropRect.left, cropRect.top, r, handlePaint)
-            canvas.drawCircle(cropRect.right, cropRect.top, r, handlePaint)
-            canvas.drawCircle(cropRect.left, cropRect.bottom, r, handlePaint)
-            canvas.drawCircle(cropRect.right, cropRect.bottom, r, handlePaint)
+            // 2. Cut out rounded Circle-to-Search style window
+            val r = min(CORNER_RADIUS, min(cropRect.width(), cropRect.height()) / 2f)
+            canvas.drawRoundRect(cropRect, r, r, clearPaint)
+
+            // 3. Soft gradient outer glow + crisp gradient border
+            canvas.drawRoundRect(cropRect, r, r, glowPaint)
+            canvas.drawRoundRect(cropRect, r, r, borderPaint)
+
+            // 4. Crisp white corner arcs (Circle to Search / Smart Select style)
+            val arcBox = r * 2f
+            val arcSweep = 90f
+            // Top-Left
+            canvas.drawArc(
+                cropRect.left, cropRect.top, cropRect.left + arcBox, cropRect.top + arcBox,
+                180f, arcSweep, false, cornerArcPaint
+            )
+            // Top-Right
+            canvas.drawArc(
+                cropRect.right - arcBox, cropRect.top, cropRect.right, cropRect.top + arcBox,
+                270f, arcSweep, false, cornerArcPaint
+            )
+            // Bottom-Right
+            canvas.drawArc(
+                cropRect.right - arcBox, cropRect.bottom - arcBox, cropRect.right, cropRect.bottom,
+                0f, arcSweep, false, cornerArcPaint
+            )
+            // Bottom-Left
+            canvas.drawArc(
+                cropRect.left, cropRect.bottom - arcBox, cropRect.left + arcBox, cropRect.bottom,
+                90f, arcSweep, false, cornerArcPaint
+            )
+
+            // 5. Subtle edge pill handles so dragging from any side is intuitive
+            val cx = cropRect.centerX()
+            val cy = cropRect.centerY()
+            val pillHalfW = min(36f, cropRect.width() * 0.16f)
+            val pillHalfH = min(36f, cropRect.height() * 0.16f)
+
+            if (cropRect.width() > MIN_SIZE * 1.2f) {
+                canvas.drawLine(cx - pillHalfW, cropRect.top, cx + pillHalfW, cropRect.top, edgePillPaint)
+                canvas.drawLine(cx - pillHalfW, cropRect.bottom, cx + pillHalfW, cropRect.bottom, edgePillPaint)
+            }
+            if (cropRect.height() > MIN_SIZE * 1.2f) {
+                canvas.drawLine(cropRect.left, cy - pillHalfH, cropRect.left, cy + pillHalfH, edgePillPaint)
+                canvas.drawLine(cropRect.right, cy - pillHalfH, cropRect.right, cy + pillHalfH, edgePillPaint)
+            }
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -330,11 +410,19 @@ class CropOverlayManager(
                     lastX = x
                     lastY = y
                     activeMode = when {
+                        // Corners first
                         near(x, y, cropRect.left, cropRect.top) -> MODE_TL
                         near(x, y, cropRect.right, cropRect.top) -> MODE_TR
                         near(x, y, cropRect.left, cropRect.bottom) -> MODE_BL
                         near(x, y, cropRect.right, cropRect.bottom) -> MODE_BR
+                        // Edges (ضلوع المستطيل)
+                        abs(x - cropRect.left) <= EDGE_HIT && y in (cropRect.top..cropRect.bottom) -> MODE_LEFT
+                        abs(x - cropRect.right) <= EDGE_HIT && y in (cropRect.top..cropRect.bottom) -> MODE_RIGHT
+                        abs(y - cropRect.top) <= EDGE_HIT && x in (cropRect.left..cropRect.right) -> MODE_TOP
+                        abs(y - cropRect.bottom) <= EDGE_HIT && x in (cropRect.left..cropRect.right) -> MODE_BOTTOM
+                        // Inside body -> move entire frame
                         cropRect.contains(x, y) -> MODE_MOVE
+                        // Outside -> draw new frame
                         else -> {
                             cropRect.set(x, y, x + 1f, y + 1f)
                             MODE_NEW
@@ -363,11 +451,23 @@ class CropOverlayManager(
                             cropRect.right = max(x, cropRect.left + MIN_SIZE)
                             cropRect.bottom = max(y, cropRect.top + MIN_SIZE)
                         }
+                        MODE_LEFT -> {
+                            cropRect.left = min(x, cropRect.right - MIN_SIZE)
+                        }
+                        MODE_RIGHT -> {
+                            cropRect.right = max(x, cropRect.left + MIN_SIZE)
+                        }
+                        MODE_TOP -> {
+                            cropRect.top = min(y, cropRect.bottom - MIN_SIZE)
+                        }
+                        MODE_BOTTOM -> {
+                            cropRect.bottom = max(y, cropRect.top + MIN_SIZE)
+                        }
                         MODE_MOVE -> {
                             val w = cropRect.width()
                             val h = cropRect.height()
-                            var nl = (cropRect.left + dx).coerceIn(0f, width - w)
-                            var nt = (cropRect.top + dy).coerceIn(0f, height - h)
+                            val nl = (cropRect.left + dx).coerceIn(0f, (width - w).coerceAtLeast(0f))
+                            val nt = (cropRect.top + dy).coerceIn(0f, (height - h).coerceAtLeast(0f))
                             cropRect.set(nl, nt, nl + w, nt + h)
                         }
                         MODE_NEW -> {
@@ -400,7 +500,7 @@ class CropOverlayManager(
         }
 
         private fun near(x: Float, y: Float, cx: Float, cy: Float): Boolean {
-            return abs(x - cx) <= HANDLE_RADIUS && abs(y - cy) <= HANDLE_RADIUS
+            return abs(x - cx) <= CORNER_HIT && abs(y - cy) <= CORNER_HIT
         }
     }
 }
