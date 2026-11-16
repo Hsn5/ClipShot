@@ -3,7 +3,7 @@
     <shortcut
         android:shortcutId="capture_to_clipboard"
         android:enabled="true"
-        android:icon="@android:drawable/ic_menu_camera"
+        android:icon="@mipmap/ic_launcher"
         android:shortcutShortLabel="@string/shortcut_short_label"
         android:shortcutLongLabel="@string/shortcut_long_label">
         <intent
