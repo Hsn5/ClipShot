@@ -1,9 +1,11 @@
 package com.example.clipshot
 
 import android.app.Activity
+import android.app.Dialog
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -13,10 +15,14 @@ import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
+import android.view.Window
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -62,7 +68,6 @@ object ScreenshotVaultManager {
     private const val KEY_ITEMS = "vault_items_json"
     private val TTL_MILLIS = TimeUnit.HOURS.toMillis(24)
 
-    // Stored inside cacheDir/screenshots so it works with existing file_paths.xml without extra config!
     private fun getVaultDir(context: Context): File {
         val dir = File(context.cacheDir, "screenshots")
         if (!dir.exists()) dir.mkdirs()
@@ -183,6 +188,44 @@ object ScreenshotVaultManager {
         return true
     }
 
+    /**
+     * Saves the screenshot to the device's Gallery (Pictures/ClipShot) via MediaStore.
+     * Requires zero storage permissions on Android 11+ (API 30+).
+     */
+    fun saveToGallery(context: Context, item: VaultItem): Boolean {
+        val file = getFileForItem(context, item)
+        if (!file.exists()) return false
+        return try {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "ClipShot_${item.id}.png")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/png")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/ClipShot")
+                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                }
+            }
+            val resolver = context.contentResolver
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                ?: return false
+
+            resolver.openOutputStream(uri)?.use { out ->
+                file.inputStream().use { input ->
+                    input.copyTo(out)
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.clear()
+                values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+            }
+            true
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
+        }
+    }
+
     private fun copyFileToClipboard(context: Context, file: File) {
         val uri = FileProvider.getUriForFile(
             context,
@@ -260,7 +303,7 @@ class MainActivity : Activity() {
         }
 
         val titleText = TextView(this).apply {
-            text = "ClipShot v6.0"
+            text = "ClipShot"
             textSize = 28f
             setTextColor(Color.parseColor("#FFFFFF"))
             gravity = Gravity.CENTER
@@ -360,7 +403,7 @@ class MainActivity : Activity() {
         vaultHeaderRow.addView(clearUnpinnedBtn)
 
         val vaultHintText = TextView(this).apply {
-            text = "Unpinned screenshots auto-delete after 24 hours. Pin 📌 important shots to keep them forever. None of these ever appear in your phone's Gallery."
+            text = "Tap any thumbnail or 'View' to inspect full-screen. Unpinned shots auto-delete after 24h unless pinned or saved to Gallery."
             textSize = 12f
             setTextColor(Color.parseColor("#8B949E"))
             setPadding(0, 0, 0, 24)
@@ -464,10 +507,13 @@ class MainActivity : Activity() {
 
         val thumbView = ImageView(this).apply {
             layoutParams = LinearLayout.LayoutParams(160, 240).apply {
-                rightMargin = 28
+                rightMargin = 24
             }
             scaleType = ImageView.ScaleType.CENTER_CROP
             background = roundedBg("#0D1117", "#30363D", 14f)
+            setOnClickListener {
+                showFullScreenViewer(item, dateFormat)
+            }
         }
 
         val file = ScreenshotVaultManager.getFileForItem(this, item)
@@ -497,25 +543,50 @@ class MainActivity : Activity() {
                 if (item.isPinned) Color.parseColor("#E3B341")
                 else Color.parseColor("#8B949E")
             )
-            setPadding(0, 6, 0, 20)
+            setPadding(0, 6, 0, 16)
         }
 
-        val actionsRow = LinearLayout(this).apply {
+        // Row 1: View | Copy | Save to Gallery
+        val row1 = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = 12
+            }
+        }
+
+        val viewBtn = Button(this).apply {
+            text = "View"
+            isAllCaps = false
+            textSize = 12f
+            setTextColor(Color.parseColor("#E0E0E0"))
+            background = roundedBg("#262B33", "#3D444D", 14f)
+            setPadding(20, 10, 20, 10)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                rightMargin = 10
+            }
+            setOnClickListener {
+                showFullScreenViewer(item, dateFormat)
+            }
         }
 
         val copyBtn = Button(this).apply {
             text = "Copy"
             isAllCaps = false
-            textSize = 13f
+            textSize = 12f
             setTextColor(Color.parseColor("#FFFFFF"))
-            background = roundedBg("#1F6FEB", "#388BFD", 16f)
-            setPadding(24, 12, 24, 12)
+            background = roundedBg("#1F6FEB", "#388BFD", 14f)
+            setPadding(20, 10, 20, 10)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                rightMargin = 14
+                rightMargin = 10
             }
             setOnClickListener {
                 val ok = ScreenshotVaultManager.copyItemToClipboard(this@MainActivity, item)
@@ -525,22 +596,49 @@ class MainActivity : Activity() {
             }
         }
 
+        val saveBtn = Button(this).apply {
+            text = "Save"
+            isAllCaps = false
+            textSize = 12f
+            setTextColor(Color.parseColor("#FFFFFF"))
+            background = roundedBg("#238636", "#2EA043", 14f)
+            setPadding(20, 10, 20, 10)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            setOnClickListener {
+                val saved = ScreenshotVaultManager.saveToGallery(this@MainActivity, item)
+                val msg = if (saved) "Saved to Gallery (Pictures/ClipShot) 🖼️" else "Failed to save to Gallery"
+                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        row1.addView(viewBtn)
+        row1.addView(copyBtn)
+        row1.addView(saveBtn)
+
+        // Row 2: Pin | Delete
+        val row2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+
         val pinBtn = Button(this).apply {
             text = if (item.isPinned) "Pinned 📌" else "Pin 📌"
             isAllCaps = false
-            textSize = 13f
+            textSize = 12f
             setTextColor(if (item.isPinned) Color.parseColor("#121212") else Color.parseColor("#E3B341"))
             background = if (item.isPinned) {
-                roundedBg("#E3B341", "#F2CC60", 16f)
+                roundedBg("#E3B341", "#F2CC60", 14f)
             } else {
-                roundedBg("#2A2415", "#6E561B", 16f)
+                roundedBg("#2A2415", "#6E561B", 14f)
             }
-            setPadding(24, 12, 24, 12)
+            setPadding(22, 10, 22, 10)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                rightMargin = 14
+                rightMargin = 10
             }
             setOnClickListener {
                 val nowPinned = ScreenshotVaultManager.togglePin(this@MainActivity, item.id)
@@ -551,12 +649,12 @@ class MainActivity : Activity() {
         }
 
         val delBtn = Button(this).apply {
-            text = "✕"
+            text = "Delete ✕"
             isAllCaps = false
-            textSize = 13f
+            textSize = 12f
             setTextColor(Color.parseColor("#FF6B6B"))
-            background = roundedBg("#25171A", "#4A252B", 16f)
-            setPadding(20, 12, 20, 12)
+            background = roundedBg("#25171A", "#4A252B", 14f)
+            setPadding(20, 10, 20, 10)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -567,17 +665,164 @@ class MainActivity : Activity() {
             }
         }
 
-        actionsRow.addView(copyBtn)
-        actionsRow.addView(pinBtn)
-        actionsRow.addView(delBtn)
+        row2.addView(pinBtn)
+        row2.addView(delBtn)
 
         infoColumn.addView(timeText)
         infoColumn.addView(expiryText)
-        infoColumn.addView(actionsRow)
+        infoColumn.addView(row1)
+        infoColumn.addView(row2)
 
         card.addView(thumbView)
         card.addView(infoColumn)
         return card
+    }
+
+    /**
+     * Full-screen Dark Mode in-app viewer with quick Copy, Save to Gallery, Pin, and Close controls.
+     */
+    private fun showFullScreenViewer(item: VaultItem, dateFormat: SimpleDateFormat) {
+        val file = ScreenshotVaultManager.getFileForItem(this, item)
+        if (!file.exists()) {
+            Toast.makeText(this, "Screenshot file not found", Toast.LENGTH_SHORT).show()
+            refreshVaultList()
+            return
+        }
+
+        val dialog = Dialog(this, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+
+        val container = FrameLayout(this).apply {
+            setBackgroundColor(Color.parseColor("#0A0A0A"))
+        }
+
+        val fullImage = ImageView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(16, 120, 16, 180)
+            setImageBitmap(BitmapFactory.decodeFile(file.absolutePath))
+            setOnClickListener { dialog.dismiss() }
+        }
+
+        // Top Bar: Timestamp + Close
+        val topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.parseColor("#CC121212"))
+            setPadding(36, 36, 36, 28)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP
+            )
+        }
+
+        val titleLabel = TextView(this).apply {
+            text = dateFormat.format(Date(item.timestamp))
+            textSize = 15f
+            setTextColor(Color.parseColor("#FFFFFF"))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+
+        val closeBtn = Button(this).apply {
+            text = "Close ✕"
+            isAllCaps = false
+            textSize = 13f
+            setTextColor(Color.parseColor("#FFFFFF"))
+            background = roundedBg("#262B33", "#3D444D", 16f)
+            setPadding(24, 12, 24, 12)
+            setOnClickListener { dialog.dismiss() }
+        }
+
+        topBar.addView(titleLabel)
+        topBar.addView(closeBtn)
+
+        // Bottom Bar: Copy | Save to Gallery | Pin
+        val bottomBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.parseColor("#CC121212"))
+            setPadding(24, 24, 24, 36)
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            )
+        }
+
+        val viewerCopyBtn = Button(this).apply {
+            text = "Copy 📋"
+            isAllCaps = false
+            textSize = 14f
+            setTextColor(Color.parseColor("#FFFFFF"))
+            background = roundedBg("#1F6FEB", "#388BFD", 18f)
+            setPadding(28, 16, 28, 16)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = 12
+            }
+            setOnClickListener {
+                if (ScreenshotVaultManager.copyItemToClipboard(this@MainActivity, item)) {
+                    Toast.makeText(this@MainActivity, "Copied to clipboard 📋", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        val viewerSaveBtn = Button(this).apply {
+            text = "Save to Gallery 🖼️"
+            isAllCaps = false
+            textSize = 14f
+            setTextColor(Color.parseColor("#FFFFFF"))
+            background = roundedBg("#238636", "#2EA043", 18f)
+            setPadding(28, 16, 28, 16)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.3f).apply {
+                rightMargin = 12
+            }
+            setOnClickListener {
+                val saved = ScreenshotVaultManager.saveToGallery(this@MainActivity, item)
+                val msg = if (saved) "Saved to Gallery (Pictures/ClipShot) 🖼️" else "Failed to save to Gallery"
+                Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        val viewerPinBtn = Button(this).apply {
+            text = if (item.isPinned) "Pinned 📌" else "Pin 📌"
+            isAllCaps = false
+            textSize = 14f
+            setTextColor(if (item.isPinned) Color.parseColor("#121212") else Color.parseColor("#E3B341"))
+            background = if (item.isPinned) {
+                roundedBg("#E3B341", "#F2CC60", 18f)
+            } else {
+                roundedBg("#2A2415", "#6E561B", 18f)
+            }
+            setPadding(24, 16, 24, 16)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.9f)
+            setOnClickListener {
+                val nowPinned = ScreenshotVaultManager.togglePin(this@MainActivity, item.id)
+                item.isPinned = nowPinned
+                text = if (nowPinned) "Pinned 📌" else "Pin 📌"
+                setTextColor(if (nowPinned) Color.parseColor("#121212") else Color.parseColor("#E3B341"))
+                background = if (nowPinned) {
+                    roundedBg("#E3B341", "#F2CC60", 18f)
+                } else {
+                    roundedBg("#2A2415", "#6E561B", 18f)
+                }
+                refreshVaultList()
+            }
+        }
+
+        bottomBar.addView(viewerCopyBtn)
+        bottomBar.addView(viewerSaveBtn)
+        bottomBar.addView(viewerPinBtn)
+
+        container.addView(fullImage)
+        container.addView(topBar)
+        container.addView(bottomBar)
+
+        dialog.setContentView(container)
+        dialog.show()
     }
 
     private fun roundedBg(fillHex: String, strokeHex: String, radiusPx: Float): GradientDrawable {
