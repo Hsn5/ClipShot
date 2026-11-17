@@ -21,6 +21,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -36,7 +37,7 @@ import kotlin.math.min
  * - Tap any UI card, image, or post to smoothly auto-snap the crop box to its exact bounds.
  * - Magnetic edge snapping when resizing near UI boundaries.
  * - Live circular pixel magnifier loupe while dragging corners or edges.
- * - Circle-to-Search glowing rounded frame, resizable from all 4 edges and 4 corners.
+ * - Floating draggable bottom action panel with smooth spring entrance animation.
  */
 class CropOverlayManager(
     private val context: Context,
@@ -77,8 +78,10 @@ class CropOverlayManager(
             }
             textSize = 13f
             setTextColor(Color.parseColor("#F0F6FC"))
-            background = roundedPill("#CC161B22", "#388BFD")
+            background = roundedPill("#CC161B22", "#388BFD", 28f)
             setPadding(32, 16, 32, 16)
+            alpha = 0f
+            translationY = -40f
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -88,21 +91,40 @@ class CropOverlayManager(
             }
         }
 
-        val bottomBar = LinearLayout(context).apply {
+        // Draggable Floating Bottom Panel
+        val bottomBar = DraggablePanelLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(24, 20, 24, 36)
-            background = roundedPill("#E6121212", "#30363D")
+            setPadding(24, 14, 24, 28)
+            background = roundedPill("#EB14181F", "#30363D", 36f)
+            elevation = 16f
+            alpha = 0f
+            translationY = 260f
+            scaleX = 0.94f
+            scaleY = 0.94f
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM
             ).apply {
-                leftMargin = 24
-                rightMargin = 24
+                leftMargin = 28
+                rightMargin = 28
                 bottomMargin = 56
             }
         }
+
+        // Sleek Drag Handle Pill at top of floating panel
+        val dragHandle = View(context).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 10f
+                setColor(Color.parseColor("#586069"))
+            }
+            layoutParams = LinearLayout.LayoutParams(110, 11).apply {
+                bottomMargin = 18
+            }
+        }
+        bottomBar.addView(dragHandle)
 
         if (!detectedUrl.isNullOrBlank()) {
             val urlBtn = Button(context).apply {
@@ -110,7 +132,7 @@ class CropOverlayManager(
                 isAllCaps = false
                 textSize = 12f
                 setTextColor(Color.parseColor("#58A6FF"))
-                background = roundedPill("#162238", "#1F6FEB")
+                background = roundedPill("#162238", "#1F6FEB", 24f)
                 setPadding(24, 12, 24, 12)
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -140,7 +162,7 @@ class CropOverlayManager(
             isAllCaps = false
             textSize = 14f
             setTextColor(Color.parseColor("#FF6B6B"))
-            background = roundedPill("#25171A", "#4A252B")
+            background = roundedPill("#25171A", "#4A252B", 24f)
             setPadding(24, 16, 24, 16)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -159,7 +181,7 @@ class CropOverlayManager(
             isAllCaps = false
             textSize = 13f
             setTextColor(Color.parseColor("#F0F6FC"))
-            background = roundedPill("#21262D", "#30363D")
+            background = roundedPill("#21262D", "#30363D", 24f)
             setPadding(24, 16, 24, 16)
             layoutParams = LinearLayout.LayoutParams(
                 0,
@@ -179,7 +201,7 @@ class CropOverlayManager(
             isAllCaps = false
             textSize = 13f
             setTextColor(Color.parseColor("#FFFFFF"))
-            background = roundedPill("#238636", "#2EA043")
+            background = roundedPill("#238636", "#2EA043", 24f)
             setPadding(24, 16, 24, 16)
             layoutParams = LinearLayout.LayoutParams(
                 0,
@@ -222,6 +244,23 @@ class CropOverlayManager(
 
         rootLayout = container
         windowManager.addView(container, params)
+
+        // Smooth Spring Entrance Animations
+        topHint.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .setDuration(260L)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
+
+        bottomBar.animate()
+            .alpha(1f)
+            .translationY(0f)
+            .scaleX(1f)
+            .scaleY(1f)
+            .setDuration(340L)
+            .setInterpolator(OvershootInterpolator(1.1f))
+            .start()
     }
 
     private fun extractCroppedBitmap(selectionView: CropSelectionView): Bitmap {
@@ -258,12 +297,65 @@ class CropOverlayManager(
         rootLayout = null
     }
 
-    private fun roundedPill(fillHex: String, strokeHex: String): GradientDrawable {
+    private fun roundedPill(fillHex: String, strokeHex: String, radiusPx: Float): GradientDrawable {
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
-            cornerRadius = 28f
+            cornerRadius = radiusPx
             setColor(Color.parseColor(fillHex))
             setStroke(2, Color.parseColor(strokeHex))
+        }
+    }
+
+    /**
+     * Floating panel that can be smoothly lifted up and down by dragging anywhere on it,
+     * while preserving normal button taps.
+     */
+    private class DraggablePanelLayout(context: Context) : LinearLayout(context) {
+        private var startRawY = 0f
+        private var startTransY = 0f
+
+        override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startRawY = ev.rawY
+                    startTransY = translationY
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (abs(ev.rawY - startRawY) > 16f) {
+                        return true
+                    }
+                }
+            }
+            return super.onInterceptTouchEvent(ev)
+        }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            val parentH = (parent as? View)?.height?.toFloat() ?: 2000f
+            val maxLift = -(parentH - height - 240f).coerceAtLeast(120f)
+
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startRawY = event.rawY
+                    startTransY = translationY
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dy = event.rawY - startRawY
+                    translationY = (startTransY + dy).coerceIn(maxLift, 48f)
+                    return true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (translationY > 0f) {
+                        animate()
+                            .translationY(0f)
+                            .setDuration(220L)
+                            .setInterpolator(OvershootInterpolator(1.1f))
+                            .start()
+                    }
+                    return true
+                }
+            }
+            return super.onTouchEvent(event)
         }
     }
 
@@ -399,25 +491,20 @@ class CropOverlayManager(
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
 
-            // 1. Darken outside area
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dimPaint)
 
-            // 2. Subtle smart-element outlines in background while resizing/choosing
             if (activeMode == MODE_NONE && smartBounds.isNotEmpty()) {
                 for (b in smartBounds) {
                     canvas.drawRoundRect(b, 16f, 16f, smartHintPaint)
                 }
             }
 
-            // 3. Cut out rounded Circle-to-Search style window
             val r = min(CORNER_RADIUS, min(cropRect.width(), cropRect.height()) / 2f)
             canvas.drawRoundRect(cropRect, r, r, clearPaint)
 
-            // 4. Soft gradient outer glow + crisp gradient border
             canvas.drawRoundRect(cropRect, r, r, glowPaint)
             canvas.drawRoundRect(cropRect, r, r, borderPaint)
 
-            // 5. Crisp white corner arcs
             val arcBox = r * 2f
             canvas.drawArc(
                 cropRect.left, cropRect.top, cropRect.left + arcBox, cropRect.top + arcBox,
@@ -436,7 +523,6 @@ class CropOverlayManager(
                 90f, 90f, false, cornerArcPaint
             )
 
-            // 6. Edge pill handles
             val cx = cropRect.centerX()
             val cy = cropRect.centerY()
             val pillHalfW = min(36f, cropRect.width() * 0.16f)
@@ -451,7 +537,6 @@ class CropOverlayManager(
                 canvas.drawLine(cropRect.right, cy - pillHalfH, cropRect.right, cy + pillHalfH, edgePillPaint)
             }
 
-            // 7. Live circular pixel magnifier loupe when resizing edges/corners
             if (showLoupe && width > 0 && height > 0) {
                 drawMagnifierLoupe(canvas)
             }
@@ -473,7 +558,6 @@ class CropOverlayManager(
                 (bmpY + sampleRadiusY).coerceIn(1, fullBitmap.height)
             )
 
-            // Position loupe comfortably above the finger (or below if near top)
             val centerX = loupeX.coerceIn(LOUPE_RADIUS + 20f, width - LOUPE_RADIUS - 20f)
             val centerY = if (loupeY > LOUPE_RADIUS * 2.5f + 120f) {
                 loupeY - LOUPE_RADIUS - 90f
@@ -598,7 +682,6 @@ class CropOverlayManager(
                 MotionEvent.ACTION_UP -> {
                     showLoupe = false
 
-                    // Smart Tap-to-Snap: tapping an item snaps the crop frame cleanly to that UI card/image!
                     if (movedDistance <= TAP_SLOP && smartBounds.isNotEmpty()) {
                         val target = findBestSmartTarget(x, y)
                         if (target != null) {
@@ -623,7 +706,6 @@ class CropOverlayManager(
         }
 
         private fun findBestSmartTarget(x: Float, y: Float): RectF? {
-            // Find the smallest UI element containing (x, y) that isn't already identical to cropRect
             val candidates = smartBounds
                 .filter { it.contains(x, y) }
                 .sortedBy { it.width() * it.height() }
