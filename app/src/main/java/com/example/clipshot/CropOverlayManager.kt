@@ -400,12 +400,6 @@ class CropOverlayManager(
             strokeCap = Paint.Cap.ROUND
             isAntiAlias = true
         }
-        private val smartHintPaint = Paint().apply {
-            color = Color.parseColor("#26FFFFFF")
-            style = Paint.Style.STROKE
-            strokeWidth = 2f
-            isAntiAlias = true
-        }
         private val loupeBorderPaint = Paint().apply {
             color = Color.WHITE
             style = Paint.Style.STROKE
@@ -500,12 +494,6 @@ class CropOverlayManager(
             super.onDraw(canvas)
 
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dimPaint)
-
-            if (activeMode == MODE_NONE && smartBounds.isNotEmpty()) {
-                for (b in smartBounds) {
-                    canvas.drawRoundRect(b, 16f, 16f, smartHintPaint)
-                }
-            }
 
             val r = min(CORNER_RADIUS, min(cropRect.width(), cropRect.height()) / 2f)
             canvas.drawRoundRect(cropRect, r, r, clearPaint)
