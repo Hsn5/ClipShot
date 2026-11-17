@@ -1,14 +1,17 @@
 package com.example.clipshot
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
@@ -17,24 +20,29 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Floating TYPE_ACCESSIBILITY_OVERLAY crop editor styled like Circle to Search:
- * - Rounded glowing gradient frame with corner arcs and edge pill handles.
- * - Smooth resizing from all 4 edges (sides) AND all 4 corners, plus dragging from inside.
+ * Smart Samsung-style Crop Overlay:
+ * - Tap any UI card, image, or post to smoothly auto-snap the crop box to its exact bounds.
+ * - Magnetic edge snapping when resizing near UI boundaries.
+ * - Live circular pixel magnifier loupe while dragging corners or edges.
+ * - Circle-to-Search glowing rounded frame, resizable from all 4 edges and 4 corners.
  */
 class CropOverlayManager(
     private val context: Context,
     private val fullBitmap: Bitmap,
     private val detectedUrl: String?,
+    private val smartBounds: List<RectF> = emptyList(),
     private val onResultBitmap: (Bitmap) -> Unit,
     private val onCopyUrlOnly: (String) -> Unit,
     private val onCancel: () -> Unit
@@ -54,16 +62,19 @@ class CropOverlayManager(
             )
         }
 
-        val selectionView = CropSelectionView(context).apply {
+        val selectionView = CropSelectionView(context, fullBitmap, smartBounds).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             )
         }
 
-        // Top Instruction Pill
         val topHint = TextView(context).apply {
-            text = "Drag corners, edges, or draw anywhere"
+            text = if (smartBounds.isNotEmpty()) {
+                "Tap any item to snap • Drag edges or draw"
+            } else {
+                "Drag corners, edges, or draw anywhere"
+            }
             textSize = 13f
             setTextColor(Color.parseColor("#F0F6FC"))
             background = roundedPill("#CC161B22", "#388BFD")
@@ -77,7 +88,6 @@ class CropOverlayManager(
             }
         }
 
-        // Bottom Floating Action Bar
         val bottomBar = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -257,7 +267,12 @@ class CropOverlayManager(
         }
     }
 
-    private class CropSelectionView(context: Context) : View(context) {
+    private class CropSelectionView(
+        context: Context,
+        private val fullBitmap: Bitmap,
+        private val smartBounds: List<RectF>
+    ) : View(context) {
+
         private val dimPaint = Paint().apply {
             color = Color.parseColor("#99000000")
             style = Paint.Style.FILL
@@ -269,7 +284,7 @@ class CropOverlayManager(
         private val glowPaint = Paint().apply {
             style = Paint.Style.STROKE
             strokeWidth = 14f
-            alpha = 90
+            alpha = 95
             isAntiAlias = true
         }
         private val borderPaint = Paint().apply {
@@ -291,13 +306,43 @@ class CropOverlayManager(
             strokeCap = Paint.Cap.ROUND
             isAntiAlias = true
         }
+        private val smartHintPaint = Paint().apply {
+            color = Color.parseColor("#26FFFFFF")
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+            isAntiAlias = true
+        }
+        private val loupeBorderPaint = Paint().apply {
+            color = Color.WHITE
+            style = Paint.Style.STROKE
+            strokeWidth = 5f
+            isAntiAlias = true
+        }
+        private val loupeCrosshairPaint = Paint().apply {
+            color = Color.parseColor("#388BFD")
+            style = Paint.Style.STROKE
+            strokeWidth = 2.5f
+            isAntiAlias = true
+        }
 
         private val cropRect = RectF()
         private var initialized = false
 
         private var activeMode = MODE_NONE
+        private var downX = 0f
+        private var downY = 0f
         private var lastX = 0f
         private var lastY = 0f
+        private var movedDistance = 0f
+
+        private var showLoupe = false
+        private var loupeX = 0f
+        private var loupeY = 0f
+        private val loupePath = Path()
+        private val loupeSrcRect = Rect()
+        private val loupeDstRect = RectF()
+
+        private var snapAnimator: ValueAnimator? = null
 
         companion object {
             private const val MODE_NONE = 0
@@ -313,9 +358,12 @@ class CropOverlayManager(
             private const val MODE_NEW = 10
 
             private const val CORNER_RADIUS = 52f
-            private const val CORNER_HIT = 60f
-            private const val EDGE_HIT = 52f
+            private const val CORNER_HIT = 64f
+            private const val EDGE_HIT = 54f
             private const val MIN_SIZE = 120f
+            private const val MAGNET_THRESHOLD = 22f
+            private const val TAP_SLOP = 18f
+            private const val LOUPE_RADIUS = 115f
         }
 
         init {
@@ -350,42 +398,45 @@ class CropOverlayManager(
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
+
             // 1. Darken outside area
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), dimPaint)
 
-            // 2. Cut out rounded Circle-to-Search style window
+            // 2. Subtle smart-element outlines in background while resizing/choosing
+            if (activeMode == MODE_NONE && smartBounds.isNotEmpty()) {
+                for (b in smartBounds) {
+                    canvas.drawRoundRect(b, 16f, 16f, smartHintPaint)
+                }
+            }
+
+            // 3. Cut out rounded Circle-to-Search style window
             val r = min(CORNER_RADIUS, min(cropRect.width(), cropRect.height()) / 2f)
             canvas.drawRoundRect(cropRect, r, r, clearPaint)
 
-            // 3. Soft gradient outer glow + crisp gradient border
+            // 4. Soft gradient outer glow + crisp gradient border
             canvas.drawRoundRect(cropRect, r, r, glowPaint)
             canvas.drawRoundRect(cropRect, r, r, borderPaint)
 
-            // 4. Crisp white corner arcs (Circle to Search / Smart Select style)
+            // 5. Crisp white corner arcs
             val arcBox = r * 2f
-            val arcSweep = 90f
-            // Top-Left
             canvas.drawArc(
                 cropRect.left, cropRect.top, cropRect.left + arcBox, cropRect.top + arcBox,
-                180f, arcSweep, false, cornerArcPaint
+                180f, 90f, false, cornerArcPaint
             )
-            // Top-Right
             canvas.drawArc(
                 cropRect.right - arcBox, cropRect.top, cropRect.right, cropRect.top + arcBox,
-                270f, arcSweep, false, cornerArcPaint
+                270f, 90f, false, cornerArcPaint
             )
-            // Bottom-Right
             canvas.drawArc(
                 cropRect.right - arcBox, cropRect.bottom - arcBox, cropRect.right, cropRect.bottom,
-                0f, arcSweep, false, cornerArcPaint
+                0f, 90f, false, cornerArcPaint
             )
-            // Bottom-Left
             canvas.drawArc(
                 cropRect.left, cropRect.bottom - arcBox, cropRect.left + arcBox, cropRect.bottom,
-                90f, arcSweep, false, cornerArcPaint
+                90f, 90f, false, cornerArcPaint
             )
 
-            // 5. Subtle edge pill handles so dragging from any side is intuitive
+            // 6. Edge pill handles
             val cx = cropRect.centerX()
             val cy = cropRect.centerY()
             val pillHalfW = min(36f, cropRect.width() * 0.16f)
@@ -399,6 +450,55 @@ class CropOverlayManager(
                 canvas.drawLine(cropRect.left, cy - pillHalfH, cropRect.left, cy + pillHalfH, edgePillPaint)
                 canvas.drawLine(cropRect.right, cy - pillHalfH, cropRect.right, cy + pillHalfH, edgePillPaint)
             }
+
+            // 7. Live circular pixel magnifier loupe when resizing edges/corners
+            if (showLoupe && width > 0 && height > 0) {
+                drawMagnifierLoupe(canvas)
+            }
+        }
+
+        private fun drawMagnifierLoupe(canvas: Canvas) {
+            val scaleX = fullBitmap.width / width.toFloat()
+            val scaleY = fullBitmap.height / height.toFloat()
+
+            val bmpX = (loupeX * scaleX).toInt()
+            val bmpY = (loupeY * scaleY).toInt()
+            val sampleRadiusX = ((LOUPE_RADIUS / 1.9f) * scaleX).toInt().coerceAtLeast(20)
+            val sampleRadiusY = ((LOUPE_RADIUS / 1.9f) * scaleY).toInt().coerceAtLeast(20)
+
+            loupeSrcRect.set(
+                (bmpX - sampleRadiusX).coerceIn(0, fullBitmap.width - 2),
+                (bmpY - sampleRadiusY).coerceIn(0, fullBitmap.height - 2),
+                (bmpX + sampleRadiusX).coerceIn(1, fullBitmap.width),
+                (bmpY + sampleRadiusY).coerceIn(1, fullBitmap.height)
+            )
+
+            // Position loupe comfortably above the finger (or below if near top)
+            val centerX = loupeX.coerceIn(LOUPE_RADIUS + 20f, width - LOUPE_RADIUS - 20f)
+            val centerY = if (loupeY > LOUPE_RADIUS * 2.5f + 120f) {
+                loupeY - LOUPE_RADIUS - 90f
+            } else {
+                loupeY + LOUPE_RADIUS + 90f
+            }
+
+            loupeDstRect.set(
+                centerX - LOUPE_RADIUS,
+                centerY - LOUPE_RADIUS,
+                centerX + LOUPE_RADIUS,
+                centerY + LOUPE_RADIUS
+            )
+
+            loupePath.reset()
+            loupePath.addCircle(centerX, centerY, LOUPE_RADIUS, Path.Direction.CW)
+
+            canvas.save()
+            canvas.clipPath(loupePath)
+            canvas.drawBitmap(fullBitmap, loupeSrcRect, loupeDstRect, null)
+            canvas.drawLine(centerX - 18f, centerY, centerX + 18f, centerY, loupeCrosshairPaint)
+            canvas.drawLine(centerX, centerY - 18f, centerX, centerY + 18f, loupeCrosshairPaint)
+            canvas.restore()
+
+            canvas.drawCircle(centerX, centerY, LOUPE_RADIUS, loupeBorderPaint)
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -407,61 +507,72 @@ class CropOverlayManager(
 
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    snapAnimator?.cancel()
+                    downX = x
+                    downY = y
                     lastX = x
                     lastY = y
+                    movedDistance = 0f
+
                     activeMode = when {
-                        // Corners first
                         near(x, y, cropRect.left, cropRect.top) -> MODE_TL
                         near(x, y, cropRect.right, cropRect.top) -> MODE_TR
                         near(x, y, cropRect.left, cropRect.bottom) -> MODE_BL
                         near(x, y, cropRect.right, cropRect.bottom) -> MODE_BR
-                        // Edges (ضلوع المستطيل)
                         abs(x - cropRect.left) <= EDGE_HIT && y in (cropRect.top..cropRect.bottom) -> MODE_LEFT
                         abs(x - cropRect.right) <= EDGE_HIT && y in (cropRect.top..cropRect.bottom) -> MODE_RIGHT
                         abs(y - cropRect.top) <= EDGE_HIT && x in (cropRect.left..cropRect.right) -> MODE_TOP
                         abs(y - cropRect.bottom) <= EDGE_HIT && x in (cropRect.left..cropRect.right) -> MODE_BOTTOM
-                        // Inside body -> move entire frame
                         cropRect.contains(x, y) -> MODE_MOVE
-                        // Outside -> draw new frame
-                        else -> {
-                            cropRect.set(x, y, x + 1f, y + 1f)
-                            MODE_NEW
-                        }
+                        else -> MODE_NEW
                     }
                     invalidate()
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    movedDistance = hypot((x - downX).toDouble(), (y - downY).toDouble()).toFloat()
+                    if (activeMode == MODE_NEW && movedDistance <= TAP_SLOP) {
+                        return true
+                    }
+
                     val dx = x - lastX
                     val dy = y - lastY
+
+                    showLoupe = activeMode in setOf(
+                        MODE_TL, MODE_TR, MODE_BL, MODE_BR,
+                        MODE_LEFT, MODE_RIGHT, MODE_TOP, MODE_BOTTOM
+                    )
+                    loupeX = x
+                    loupeY = y
+
                     when (activeMode) {
                         MODE_TL -> {
-                            cropRect.left = min(x, cropRect.right - MIN_SIZE)
-                            cropRect.top = min(y, cropRect.bottom - MIN_SIZE)
+                            cropRect.left = snapX(min(x, cropRect.right - MIN_SIZE))
+                            cropRect.top = snapY(min(y, cropRect.bottom - MIN_SIZE))
                         }
                         MODE_TR -> {
-                            cropRect.right = max(x, cropRect.left + MIN_SIZE)
-                            cropRect.top = min(y, cropRect.bottom - MIN_SIZE)
+                            cropRect.right = snapX(max(x, cropRect.left + MIN_SIZE))
+                            cropRect.top = snapY(min(y, cropRect.bottom - MIN_SIZE))
                         }
                         MODE_BL -> {
-                            cropRect.left = min(x, cropRect.right - MIN_SIZE)
-                            cropRect.bottom = max(y, cropRect.top + MIN_SIZE)
+                            cropRect.left = snapX(min(x, cropRect.right - MIN_SIZE))
+                            cropRect.bottom = snapY(max(y, cropRect.top + MIN_SIZE))
                         }
                         MODE_BR -> {
-                            cropRect.right = max(x, cropRect.left + MIN_SIZE)
-                            cropRect.bottom = max(y, cropRect.top + MIN_SIZE)
+                            cropRect.right = snapX(max(x, cropRect.left + MIN_SIZE))
+                            cropRect.bottom = snapY(max(y, cropRect.top + MIN_SIZE))
                         }
                         MODE_LEFT -> {
-                            cropRect.left = min(x, cropRect.right - MIN_SIZE)
+                            cropRect.left = snapX(min(x, cropRect.right - MIN_SIZE))
                         }
                         MODE_RIGHT -> {
-                            cropRect.right = max(x, cropRect.left + MIN_SIZE)
+                            cropRect.right = snapX(max(x, cropRect.left + MIN_SIZE))
                         }
                         MODE_TOP -> {
-                            cropRect.top = min(y, cropRect.bottom - MIN_SIZE)
+                            cropRect.top = snapY(min(y, cropRect.bottom - MIN_SIZE))
                         }
                         MODE_BOTTOM -> {
-                            cropRect.bottom = max(y, cropRect.top + MIN_SIZE)
+                            cropRect.bottom = snapY(max(y, cropRect.top + MIN_SIZE))
                         }
                         MODE_MOVE -> {
                             val w = cropRect.width()
@@ -471,10 +582,10 @@ class CropOverlayManager(
                             cropRect.set(nl, nt, nl + w, nt + h)
                         }
                         MODE_NEW -> {
-                            cropRect.left = min(lastX, x)
-                            cropRect.top = min(lastY, y)
-                            cropRect.right = max(lastX, x)
-                            cropRect.bottom = max(lastY, y)
+                            cropRect.left = min(downX, x)
+                            cropRect.top = min(downY, y)
+                            cropRect.right = max(downX, x)
+                            cropRect.bottom = max(downY, y)
                         }
                     }
                     if (activeMode != MODE_NEW) {
@@ -485,6 +596,18 @@ class CropOverlayManager(
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
+                    showLoupe = false
+
+                    // Smart Tap-to-Snap: tapping an item snaps the crop frame cleanly to that UI card/image!
+                    if (movedDistance <= TAP_SLOP && smartBounds.isNotEmpty()) {
+                        val target = findBestSmartTarget(x, y)
+                        if (target != null) {
+                            activeMode = MODE_NONE
+                            animateCropTo(target)
+                            return true
+                        }
+                    }
+
                     if (cropRect.width() < MIN_SIZE) {
                         cropRect.right = min(width.toFloat(), cropRect.left + MIN_SIZE)
                     }
@@ -497,6 +620,58 @@ class CropOverlayManager(
                 }
             }
             return super.onTouchEvent(event)
+        }
+
+        private fun findBestSmartTarget(x: Float, y: Float): RectF? {
+            // Find the smallest UI element containing (x, y) that isn't already identical to cropRect
+            val candidates = smartBounds
+                .filter { it.contains(x, y) }
+                .sortedBy { it.width() * it.height() }
+
+            if (candidates.isEmpty()) return null
+            for (cand in candidates) {
+                val sameAsCurrent = abs(cand.left - cropRect.left) < 12f &&
+                    abs(cand.top - cropRect.top) < 12f &&
+                    abs(cand.right - cropRect.right) < 12f &&
+                    abs(cand.bottom - cropRect.bottom) < 12f
+                if (!sameAsCurrent) return cand
+            }
+            return candidates.first()
+        }
+
+        private fun animateCropTo(target: RectF) {
+            val start = RectF(cropRect)
+            snapAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 190L
+                interpolator = DecelerateInterpolator()
+                addUpdateListener { anim ->
+                    val t = anim.animatedValue as Float
+                    cropRect.set(
+                        start.left + (target.left - start.left) * t,
+                        start.top + (target.top - start.top) * t,
+                        start.right + (target.right - start.right) * t,
+                        start.bottom + (target.bottom - start.bottom) * t
+                    )
+                    invalidate()
+                }
+                start()
+            }
+        }
+
+        private fun snapX(rawX: Float): Float {
+            for (b in smartBounds) {
+                if (abs(rawX - b.left) <= MAGNET_THRESHOLD) return b.left
+                if (abs(rawX - b.right) <= MAGNET_THRESHOLD) return b.right
+            }
+            return rawX
+        }
+
+        private fun snapY(rawY: Float): Float {
+            for (b in smartBounds) {
+                if (abs(rawY - b.top) <= MAGNET_THRESHOLD) return b.top
+                if (abs(rawY - b.bottom) <= MAGNET_THRESHOLD) return b.bottom
+            }
+            return rawY
         }
 
         private fun near(x: Float, y: Float, cx: Float, cy: Float): Boolean {
