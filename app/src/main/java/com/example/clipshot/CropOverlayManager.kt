@@ -35,8 +35,8 @@ import kotlin.math.min
 /**
  * Smart Samsung-style Crop Overlay:
  * - Tap any UI card, image, or post to smoothly auto-snap the crop box to its exact bounds.
- * - Magnetic edge snapping when resizing near UI boundaries.
- * - Live circular pixel magnifier loupe while dragging corners or edges.
+ * - Double-tap in empty space (outside the crop box) for instant Full Screen capture.
+ * - Magnetic edge snapping + live circular pixel magnifier loupe while resizing.
  * - Floating draggable bottom action panel with smooth spring entrance animation.
  */
 class CropOverlayManager(
@@ -63,7 +63,15 @@ class CropOverlayManager(
             )
         }
 
-        val selectionView = CropSelectionView(context, fullBitmap, smartBounds).apply {
+        val selectionView = CropSelectionView(
+            context = context,
+            fullBitmap = fullBitmap,
+            smartBounds = smartBounds,
+            onDoubleTapFullScreen = {
+                dismiss()
+                onResultBitmap(fullBitmap)
+            }
+        ).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
@@ -72,9 +80,9 @@ class CropOverlayManager(
 
         val topHint = TextView(context).apply {
             text = if (smartBounds.isNotEmpty()) {
-                "Tap any item to snap • Drag edges or draw"
+                "Tap item to snap • Double-tap outside = Full"
             } else {
-                "Drag corners, edges, or draw anywhere"
+                "Drag edges to crop • Double-tap outside = Full"
             }
             textSize = 13f
             setTextColor(Color.parseColor("#F0F6FC"))
@@ -91,7 +99,6 @@ class CropOverlayManager(
             }
         }
 
-        // Draggable Floating Bottom Panel
         val bottomBar = DraggablePanelLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -113,7 +120,6 @@ class CropOverlayManager(
             }
         }
 
-        // Sleek Drag Handle Pill at top of floating panel
         val dragHandle = View(context).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
@@ -245,7 +251,6 @@ class CropOverlayManager(
         rootLayout = container
         windowManager.addView(container, params)
 
-        // Smooth Spring Entrance Animations
         topHint.animate()
             .alpha(1f)
             .translationY(0f)
@@ -306,10 +311,6 @@ class CropOverlayManager(
         }
     }
 
-    /**
-     * Floating panel that can be smoothly lifted up and down by dragging anywhere on it,
-     * while preserving normal button taps.
-     */
     private class DraggablePanelLayout(context: Context) : LinearLayout(context) {
         private var startRawY = 0f
         private var startTransY = 0f
@@ -362,7 +363,8 @@ class CropOverlayManager(
     private class CropSelectionView(
         context: Context,
         private val fullBitmap: Bitmap,
-        private val smartBounds: List<RectF>
+        private val smartBounds: List<RectF>,
+        private val onDoubleTapFullScreen: () -> Unit
     ) : View(context) {
 
         private val dimPaint = Paint().apply {
@@ -427,6 +429,10 @@ class CropOverlayManager(
         private var lastY = 0f
         private var movedDistance = 0f
 
+        private var lastOutsideTapTime = 0L
+        private var lastOutsideTapX = 0f
+        private var lastOutsideTapY = 0f
+
         private var showLoupe = false
         private var loupeX = 0f
         private var loupeY = 0f
@@ -455,6 +461,8 @@ class CropOverlayManager(
             private const val MIN_SIZE = 120f
             private const val MAGNET_THRESHOLD = 22f
             private const val TAP_SLOP = 18f
+            private const val DOUBLE_TAP_TIMEOUT = 320L
+            private const val DOUBLE_TAP_SLOP = 70f
             private const val LOUPE_RADIUS = 115f
         }
 
@@ -682,12 +690,31 @@ class CropOverlayManager(
                 MotionEvent.ACTION_UP -> {
                     showLoupe = false
 
-                    if (movedDistance <= TAP_SLOP && smartBounds.isNotEmpty()) {
-                        val target = findBestSmartTarget(x, y)
-                        if (target != null) {
-                            activeMode = MODE_NONE
-                            animateCropTo(target)
-                            return true
+                    if (movedDistance <= TAP_SLOP) {
+                        val now = System.currentTimeMillis()
+                        val tapDist = hypot((x - lastOutsideTapX).toDouble(), (y - lastOutsideTapY).toDouble()).toFloat()
+
+                        // Double-tap in empty space (outside the crop box) -> Instant Full Screen!
+                        if (activeMode == MODE_NEW || (now - lastOutsideTapTime <= DOUBLE_TAP_TIMEOUT && tapDist <= DOUBLE_TAP_SLOP)) {
+                            if (now - lastOutsideTapTime <= DOUBLE_TAP_TIMEOUT && tapDist <= DOUBLE_TAP_SLOP) {
+                                lastOutsideTapTime = 0L
+                                activeMode = MODE_NONE
+                                onDoubleTapFullScreen()
+                                return true
+                            } else if (activeMode == MODE_NEW) {
+                                lastOutsideTapTime = now
+                                lastOutsideTapX = x
+                                lastOutsideTapY = y
+                            }
+                        }
+
+                        if (smartBounds.isNotEmpty()) {
+                            val target = findBestSmartTarget(x, y)
+                            if (target != null) {
+                                activeMode = MODE_NONE
+                                animateCropTo(target)
+                                return true
+                            }
                         }
                     }
 
