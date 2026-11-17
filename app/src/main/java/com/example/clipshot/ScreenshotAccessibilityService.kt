@@ -8,6 +8,8 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Rect
+import android.graphics.RectF
 import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
@@ -105,11 +107,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         return super.onUnbind(intent)
     }
 
-    /**
-     * Debounced Double-Tap Volume Down (within 260ms):
-     * Suppresses the 1st tap briefly so the system volume bar NEVER appears on a double-tap!
-     * If no 2nd tap arrives within 260ms, lowers volume normally via AudioManager.
-     */
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
             if (event.action == KeyEvent.ACTION_DOWN) {
@@ -177,6 +174,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     @RequiresApi(Build.VERSION_CODES.R)
     fun takeSilentScreenshot(openCropOverlay: Boolean = true) {
         val detectedUrl = extractCurrentBrowserUrl()
+        val smartBounds = if (openCropOverlay) extractSmartElementBounds() else emptyList()
         val executor = Executors.newSingleThreadExecutor()
 
         takeScreenshot(
@@ -200,6 +198,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
                                         context = this@ScreenshotAccessibilityService,
                                         fullBitmap = softwareBitmap,
                                         detectedUrl = detectedUrl,
+                                        smartBounds = smartBounds,
                                         onResultBitmap = { finalBitmap ->
                                             saveFinalBitmap(finalBitmap, detectedUrl)
                                         },
@@ -228,6 +227,64 @@ class ScreenshotAccessibilityService : AccessibilityService() {
                 }
             }
         )
+    }
+
+    /**
+     * Collects visible UI element bounding boxes from the active screen so the crop tool
+     * can snap smartly to cards, images, posts, and containers on tap or edge resize.
+     */
+    private fun extractSmartElementBounds(): List<RectF> {
+        val root = try {
+            rootInActiveWindow
+        } catch (_: Exception) {
+            null
+        } ?: return emptyList()
+
+        val dm = resources.displayMetrics
+        val screenW = dm.widthPixels
+        val screenH = dm.heightPixels
+        val results = mutableListOf<RectF>()
+        val seenKeys = HashSet<String>()
+
+        collectBounds(root, depth = 0, screenW = screenW, screenH = screenH, out = results, seen = seenKeys)
+        return results
+    }
+
+    private fun collectBounds(
+        node: AccessibilityNodeInfo?,
+        depth: Int,
+        screenW: Int,
+        screenH: Int,
+        out: MutableList<RectF>,
+        seen: HashSet<String>
+    ) {
+        if (node == null || depth > 12 || out.size >= 140) return
+
+        if (node.isVisibleToUser) {
+            val r = Rect()
+            node.getBoundsInScreen(r)
+            val w = r.width()
+            val h = r.height()
+            // Keep meaningful UI blocks (ignore tiny icons and full-screen root containers)
+            if (w >= 90 && h >= 70 && (w < screenW * 0.97f || h < screenH * 0.90f)) {
+                val clamped = RectF(
+                    r.left.toFloat().coerceIn(0f, screenW.toFloat()),
+                    r.top.toFloat().coerceIn(0f, screenH.toFloat()),
+                    r.right.toFloat().coerceIn(0f, screenW.toFloat()),
+                    r.bottom.toFloat().coerceIn(0f, screenH.toFloat())
+                )
+                if (clamped.width() >= 90f && clamped.height() >= 70f) {
+                    val key = "${clamped.left.toInt()}_${clamped.top.toInt()}_${clamped.right.toInt()}_${clamped.bottom.toInt()}"
+                    if (seen.add(key)) {
+                        out.add(clamped)
+                    }
+                }
+            }
+        }
+
+        for (i in 0 until node.childCount) {
+            collectBounds(node.getChild(i), depth + 1, screenW, screenH, out, seen)
+        }
     }
 
     private fun saveFinalBitmap(bitmap: Bitmap, sourceUrl: String?) {
