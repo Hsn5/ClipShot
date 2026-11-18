@@ -21,6 +21,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
 import androidx.annotation.RequiresApi
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class ScreenshotAccessibilityService : AccessibilityService() {
@@ -28,13 +29,26 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     companion object {
         const val ACTION_VAULT_UPDATED = "com.example.clipshot.ACTION_VAULT_UPDATED"
 
+        // Unique markers so normal notifications containing "clipshot" (e.g. GitHub/Gmail) NEVER trigger
+        private const val TRIGGER_SHOT_TOKEN = "##clipshot##"
+        private const val TRIGGER_URL_TOKEN = "##clipurl##"
+
         var instance: ScreenshotAccessibilityService? = null
             private set
 
+        @Volatile
+        private var isOverlayShowing = false
+
+        private var lastGlobalTriggerTime = 0L
+
         fun captureNow(delayMs: Long = 0L, openCropOverlay: Boolean = true) {
             val service = instance ?: return
-            Handler(Looper.getMainLooper()).postDelayed({
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val now = System.currentTimeMillis()
+            if (isOverlayShowing || now - lastGlobalTriggerTime < 1400L) return
+            lastGlobalTriggerTime = now
+
+            service.mainHandler.postDelayed({
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !isOverlayShowing) {
                     service.takeSilentScreenshot(openCropOverlay)
                 }
             }, delayMs)
@@ -42,7 +56,11 @@ class ScreenshotAccessibilityService : AccessibilityService() {
 
         fun copyUrlNow() {
             val service = instance ?: return
-            Handler(Looper.getMainLooper()).post {
+            val now = System.currentTimeMillis()
+            if (now - lastGlobalTriggerTime < 1400L) return
+            lastGlobalTriggerTime = now
+
+            service.mainHandler.post {
                 val url = service.extractCurrentBrowserUrl()
                 if (url != null) {
                     service.copyPlainTextToClipboard(url)
@@ -60,16 +78,17 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         }
     }
 
-    private val handler = Handler(Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+
     private var pendingSingleTap = false
     private var isVolumeDownHeld = false
-    private var lastNotificationTriggerTime = 0L
 
     private val holdRepeatRunnable = object : Runnable {
         override fun run() {
             if (isVolumeDownHeld) {
                 lowerVolume()
-                handler.postDelayed(this, 80L)
+                mainHandler.postDelayed(this, 80L)
             }
         }
     }
@@ -78,59 +97,69 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         pendingSingleTap = false
         lowerVolume()
         if (isVolumeDownHeld) {
-            handler.postDelayed(holdRepeatRunnable, 120L)
+            mainHandler.postDelayed(holdRepeatRunnable, 120L)
         }
     }
 
     private val buttonCallback = object : AccessibilityButtonController.AccessibilityButtonCallback() {
         override fun onClicked(controller: AccessibilityButtonController?) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                takeSilentScreenshot(openCropOverlay = true)
-            }
+            captureNow(delayMs = 0L, openCropOverlay = true)
         }
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        ScreenshotVaultManager.purgeExpired(applicationContext)
+        ioExecutor.execute {
+            ScreenshotVaultManager.purgeExpired(applicationContext)
+        }
         try {
             accessibilityButtonController.registerAccessibilityButtonCallback(buttonCallback)
         } catch (_: Exception) {}
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        cleanupService()
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        cleanupService()
+        ioExecutor.shutdownNow()
+        super.onDestroy()
+    }
+
+    private fun cleanupService() {
+        mainHandler.removeCallbacksAndMessages(null)
         try {
             accessibilityButtonController.unregisterAccessibilityButtonCallback(buttonCallback)
         } catch (_: Exception) {}
         instance = null
-        return super.onUnbind(intent)
+        isOverlayShowing = false
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && !isOverlayShowing) {
             if (event.action == KeyEvent.ACTION_DOWN) {
                 if (event.repeatCount == 0) {
                     if (pendingSingleTap) {
-                        handler.removeCallbacks(singleTapRunnable)
-                        handler.removeCallbacks(holdRepeatRunnable)
+                        mainHandler.removeCallbacks(singleTapRunnable)
+                        mainHandler.removeCallbacks(holdRepeatRunnable)
                         pendingSingleTap = false
                         isVolumeDownHeld = false
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                            takeSilentScreenshot(openCropOverlay = true)
-                        }
+                        captureNow(delayMs = 0L, openCropOverlay = true)
                         return true
                     } else {
                         isVolumeDownHeld = true
                         pendingSingleTap = true
-                        handler.postDelayed(singleTapRunnable, 260L)
+                        mainHandler.postDelayed(singleTapRunnable, 260L)
                         return true
                     }
                 }
                 return true
             } else if (event.action == KeyEvent.ACTION_UP) {
                 isVolumeDownHeld = false
-                handler.removeCallbacks(holdRepeatRunnable)
+                mainHandler.removeCallbacks(holdRepeatRunnable)
                 return true
             }
         }
@@ -157,14 +186,9 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         val contentDesc = event.contentDescription?.toString()?.lowercase() ?: ""
         val combined = "$text $contentDesc"
 
-        val now = System.currentTimeMillis()
-        if (now - lastNotificationTriggerTime <= 2000L) return
-
-        if (combined.contains("clipurl")) {
-            lastNotificationTriggerTime = now
-            Handler(Looper.getMainLooper()).postDelayed({ copyUrlNow() }, 150L)
-        } else if (combined.contains("clipshot")) {
-            lastNotificationTriggerTime = now
+        if (combined.contains(TRIGGER_URL_TOKEN)) {
+            mainHandler.postDelayed({ copyUrlNow() }, 150L)
+        } else if (combined.contains(TRIGGER_SHOT_TOKEN)) {
             captureNow(delayMs = 150L, openCropOverlay = true)
         }
     }
@@ -175,11 +199,10 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     fun takeSilentScreenshot(openCropOverlay: Boolean = true) {
         val detectedUrl = extractCurrentBrowserUrl()
         val smartBounds = if (openCropOverlay) extractSmartElementBounds() else emptyList()
-        val executor = Executors.newSingleThreadExecutor()
 
         takeScreenshot(
             Display.DEFAULT_DISPLAY,
-            executor,
+            ioExecutor,
             object : TakeScreenshotCallback {
                 override fun onSuccess(screenshotResult: ScreenshotResult) {
                     val hardwareBuffer = screenshotResult.hardwareBuffer
@@ -193,46 +216,71 @@ class ScreenshotAccessibilityService : AccessibilityService() {
 
                         if (softwareBitmap != null) {
                             if (openCropOverlay) {
-                                handler.post {
+                                mainHandler.post {
+                                    isOverlayShowing = true
                                     CropOverlayManager(
                                         context = this@ScreenshotAccessibilityService,
                                         fullBitmap = softwareBitmap,
                                         detectedUrl = detectedUrl,
                                         smartBounds = smartBounds,
                                         onResultBitmap = { finalBitmap ->
-                                            saveFinalBitmap(finalBitmap, detectedUrl)
+                                            isOverlayShowing = false
+                                            saveFinalBitmapAsync(finalBitmap, detectedUrl)
                                         },
                                         onCopyUrlOnly = { url ->
+                                            isOverlayShowing = false
                                             softwareBitmap.recycle()
                                             copyPlainTextToClipboard(url)
                                             showToast("Web URL copied to clipboard 🔗")
                                         },
                                         onCancel = {
+                                            isOverlayShowing = false
                                             softwareBitmap.recycle()
                                         }
                                     ).show()
                                 }
                             } else {
-                                saveFinalBitmap(softwareBitmap, detectedUrl)
+                                saveFinalBitmapAsync(softwareBitmap, detectedUrl)
                             }
                         }
                     } catch (e: Exception) {
+                        isOverlayShowing = false
                         e.printStackTrace()
                         showToast("Failed to process screenshot")
                     }
                 }
 
                 override fun onFailure(errorCode: Int) {
+                    isOverlayShowing = false
                     showToast("Screenshot failed (Error code: $errorCode)")
                 }
             }
         )
     }
 
-    /**
-     * Collects visible UI element bounding boxes from the active screen so the crop tool
-     * can snap smartly to cards, images, posts, and containers on tap or edge resize.
-     */
+    private fun saveFinalBitmapAsync(bitmap: Bitmap, sourceUrl: String?) {
+        ioExecutor.execute {
+            try {
+                ScreenshotVaultManager.saveAndCopyToClipboard(
+                    applicationContext,
+                    bitmap,
+                    sourceUrl
+                )
+            } finally {
+                bitmap.recycle()
+            }
+            mainHandler.post {
+                sendBroadcast(Intent(ACTION_VAULT_UPDATED).setPackage(packageName))
+                val msg = if (sourceUrl != null) {
+                    "Copied to clipboard & saved with URL 📋🔗"
+                } else {
+                    "Copied to clipboard & saved to 24h Vault 📋"
+                }
+                showToast(msg)
+            }
+        }
+    }
+
     private fun extractSmartElementBounds(): List<RectF> {
         val root = try {
             rootInActiveWindow
@@ -265,7 +313,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
             node.getBoundsInScreen(r)
             val w = r.width()
             val h = r.height()
-            // Keep meaningful UI blocks (ignore tiny icons and full-screen root containers)
             if (w >= 90 && h >= 70 && (w < screenW * 0.97f || h < screenH * 0.90f)) {
                 val clamped = RectF(
                     r.left.toFloat().coerceIn(0f, screenW.toFloat()),
@@ -285,22 +332,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         for (i in 0 until node.childCount) {
             collectBounds(node.getChild(i), depth + 1, screenW, screenH, out, seen)
         }
-    }
-
-    private fun saveFinalBitmap(bitmap: Bitmap, sourceUrl: String?) {
-        ScreenshotVaultManager.saveAndCopyToClipboard(
-            applicationContext,
-            bitmap,
-            sourceUrl
-        )
-        bitmap.recycle()
-        sendBroadcast(Intent(ACTION_VAULT_UPDATED).setPackage(packageName))
-        val msg = if (sourceUrl != null) {
-            "Copied to clipboard & saved with URL 📋🔗"
-        } else {
-            "Copied to clipboard & saved to 24h Vault 📋"
-        }
-        showToast(msg)
     }
 
     fun extractCurrentBrowserUrl(): String? {
@@ -323,7 +354,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
             val nodes = root.findAccessibilityNodeInfosByViewId(viewId)
             for (node in nodes) {
                 val raw = node.text?.toString()?.trim()
-                val normalized = normalizeUrl(raw)
+                val normalized = normalizeUrl(raw, strict = false)
                 if (normalized != null) return normalized
             }
         }
@@ -336,7 +367,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         val cls = node.className?.toString() ?: ""
         if (cls.contains("EditText") || (node.viewIdResourceName?.contains("url", ignoreCase = true) == true)) {
             val raw = node.text?.toString()?.trim()
-            val normalized = normalizeUrl(raw)
+            val normalized = normalizeUrl(raw, strict = true)
             if (normalized != null) return normalized
         }
         for (i in 0 until node.childCount) {
@@ -346,13 +377,18 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         return null
     }
 
-    private fun normalizeUrl(raw: String?): String? {
+    private fun normalizeUrl(raw: String?, strict: Boolean): String? {
         if (raw.isNullOrBlank() || raw.contains(" ")) return null
         if (raw.startsWith("http://", ignoreCase = true) || raw.startsWith("https://", ignoreCase = true)) {
             return raw
         }
         if (Patterns.WEB_URL.matcher(raw).matches() && raw.contains(".")) {
-            return "https://$raw"
+            if (!strict) return "https://$raw"
+            // In fallback EditText scan, avoid false positives like "main.py" or "app.kt"
+            val commonWebTlds = listOf(".com", ".org", ".net", ".io", ".dev", ".edu", ".gov", ".co", ".me", ".app", ".ai", "/")
+            if (commonWebTlds.any { raw.contains(it, ignoreCase = true) }) {
+                return "https://$raw"
+            }
         }
         return null
     }
@@ -364,7 +400,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     }
 
     private fun showToast(message: String) {
-        Handler(Looper.getMainLooper()).post {
+        mainHandler.post {
             Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
         }
     }
