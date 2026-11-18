@@ -109,9 +109,9 @@ class CropOverlayManager(
         val bottomBar = DraggablePanelLayout(context) { resetInactivityTimeout() }.apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(24, 14, 24, 28)
-            background = roundedPill("#EB14181F", "#30363D", 36f)
-            elevation = 16f
+            setPadding(24, 14, 24, 26)
+            background = liquidGlassBg(42f)
+            elevation = 24f
             alpha = 0f
             translationY = 260f
             scaleX = 0.94f
@@ -131,7 +131,7 @@ class CropOverlayManager(
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = 10f
-                setColor(Color.parseColor("#586069"))
+                setColor(Color.parseColor("#88FFFFFF"))
             }
             layoutParams = LinearLayout.LayoutParams(110, 11).apply {
                 bottomMargin = 18
@@ -145,7 +145,7 @@ class CropOverlayManager(
                 isAllCaps = false
                 textSize = 12f
                 setTextColor(Color.parseColor("#58A6FF"))
-                background = roundedPill("#162238", "#1F6FEB", 24f)
+                background = roundedPill("#66162844", "#6658A6FF", 26f)
                 setPadding(24, 12, 24, 12)
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -175,7 +175,7 @@ class CropOverlayManager(
             isAllCaps = false
             textSize = 14f
             setTextColor(Color.parseColor("#FF6B6B"))
-            background = roundedPill("#25171A", "#4A252B", 24f)
+            background = roundedPill("#66381A1E", "#55FF6B6B", 26f)
             setPadding(24, 16, 24, 16)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -194,7 +194,7 @@ class CropOverlayManager(
             isAllCaps = false
             textSize = 13f
             setTextColor(Color.parseColor("#F0F6FC"))
-            background = roundedPill("#21262D", "#30363D", 24f)
+            background = roundedPill("#552B3340", "#4DFFFFFF", 26f)
             setPadding(24, 16, 24, 16)
             layoutParams = LinearLayout.LayoutParams(
                 0,
@@ -214,7 +214,7 @@ class CropOverlayManager(
             isAllCaps = false
             textSize = 13f
             setTextColor(Color.parseColor("#FFFFFF"))
-            background = roundedPill("#238636", "#2EA043", 24f)
+            background = roundedPill("#CC238636", "#803FB950", 26f)
             setPadding(24, 16, 24, 16)
             layoutParams = LinearLayout.LayoutParams(
                 0,
@@ -311,6 +311,21 @@ class CropOverlayManager(
         rootLayout = null
     }
 
+    private fun liquidGlassBg(radiusPx: Float): GradientDrawable {
+        return GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(
+                Color.parseColor("#A6232C3B"),
+                Color.parseColor("#7D141923"),
+                Color.parseColor("#961A222E")
+            )
+        ).apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = radiusPx
+            setStroke(3, Color.parseColor("#59FFFFFF"))
+        }
+    }
+
     private fun roundedPill(fillHex: String, strokeHex: String, radiusPx: Float): GradientDrawable {
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
@@ -326,13 +341,18 @@ class CropOverlayManager(
     ) : LinearLayout(context) {
         private var startRawY = 0f
         private var startTransY = 0f
+        private var lastRawY = 0f
+        private var lastStepDy = 0f
 
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
             onUserInteract()
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    animate().cancel()
                     startRawY = ev.rawY
+                    lastRawY = ev.rawY
                     startTransY = translationY
+                    lastStepDy = 0f
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (abs(ev.rawY - startRawY) > 16f) {
@@ -345,27 +365,36 @@ class CropOverlayManager(
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
             val parentH = (parent as? View)?.height?.toFloat() ?: 2000f
-            val maxLift = -(parentH - height - 240f).coerceAtLeast(120f)
+            val topDock = -(parentH - height - 260f).coerceAtLeast(160f)
+            val midDock = topDock * 0.5f
+            val bottomDock = 0f
 
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    animate().cancel()
                     startRawY = event.rawY
+                    lastRawY = event.rawY
                     startTransY = translationY
+                    lastStepDy = 0f
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    lastStepDy = event.rawY - lastRawY
+                    lastRawY = event.rawY
                     val dy = event.rawY - startRawY
-                    translationY = (startTransY + dy).coerceIn(maxLift, 48f)
+                    translationY = (startTransY + dy).coerceIn(topDock - 40f, 48f)
                     return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (translationY > 0f) {
-                        animate()
-                            .translationY(0f)
-                            .setDuration(220L)
-                            .setInterpolator(OvershootInterpolator(1.1f))
-                            .start()
-                    }
+                    val projectedY = (translationY + lastStepDy * 6f).coerceIn(topDock, bottomDock)
+                    val docks = listOf(bottomDock, midDock, topDock)
+                    val nearestDock = docks.minByOrNull { abs(it - projectedY) } ?: bottomDock
+
+                    animate()
+                        .translationY(nearestDock)
+                        .setDuration(280L)
+                        .setInterpolator(OvershootInterpolator(1.15f))
+                        .start()
                     return true
                 }
             }
@@ -697,24 +726,25 @@ class CropOverlayManager(
                         val now = System.currentTimeMillis()
                         val tapDist = hypot((x - lastEmptyTapX).toDouble(), (y - lastEmptyTapY).toDouble()).toFloat()
 
-                        // Only treat as double-tap Full Screen if tapping outside (and not snapping twice on the same smart card)
+                        // Double-tap that started outside the crop box -> Instant Full Screen
+                        if (lastEmptyTapTime > 0L && now - lastEmptyTapTime <= DOUBLE_TAP_TIMEOUT && tapDist <= DOUBLE_TAP_SLOP) {
+                            lastEmptyTapTime = 0L
+                            activeMode = MODE_NONE
+                            onDoubleTapFullScreen()
+                            return true
+                        }
+
                         if (activeMode == MODE_NEW) {
-                            if (now - lastEmptyTapTime <= DOUBLE_TAP_TIMEOUT && tapDist <= DOUBLE_TAP_SLOP) {
-                                lastEmptyTapTime = 0L
-                                activeMode = MODE_NONE
-                                onDoubleTapFullScreen()
-                                return true
-                            }
                             lastEmptyTapTime = now
                             lastEmptyTapX = x
                             lastEmptyTapY = y
+                        } else {
+                            lastEmptyTapTime = 0L
                         }
 
                         if (smartBounds.isNotEmpty()) {
                             val target = findBestSmartTarget(x, y)
                             if (target != null) {
-                                // Clear empty-tap timer if a smart element was snapped so a 2nd tap on it doesn't trigger Full Screen
-                                lastEmptyTapTime = 0L
                                 activeMode = MODE_NONE
                                 animateCropTo(target)
                                 return true
