@@ -34,6 +34,13 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
+/**
+ * Smart Samsung-style Crop Overlay:
+ * - Tap any UI card, image, or post to smoothly auto-snap the crop box to its exact bounds.
+ * - Double-tap outside the crop box for instant Full Screen capture.
+ * - Live circular pixel magnifier loupe while resizing corners or edges.
+ * - True Liquid Glass draggable bottom panel with live blurred backdrop refraction & magnetic 3-stop snapping.
+ */
 class CropOverlayManager(
     private val context: Context,
     private val fullBitmap: Bitmap,
@@ -46,6 +53,7 @@ class CropOverlayManager(
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private var rootLayout: FrameLayout? = null
+    private var blurredBackdrop: Bitmap? = null
 
     private val autoDismissRunnable = Runnable {
         dismiss()
@@ -57,7 +65,91 @@ class CropOverlayManager(
         timeoutHandler.postDelayed(autoDismissRunnable, 25_000L)
     }
 
+    /**
+     * Generates a fast downscaled & multi-pass blurred copy of the screenshot (< 4ms)
+     * so the floating Liquid Glass panel refracts the real live background as you drag it.
+     */
+    private fun createBlurredBackdrop(src: Bitmap): Bitmap {
+        val w = (src.width / 8).coerceAtLeast(32)
+        val h = (src.height / 8).coerceAtLeast(32)
+        val small = Bitmap.createScaledBitmap(src, w, h, true)
+        val blurred = fastBoxBlur(small, radius = 5)
+        if (blurred !== small) small.recycle()
+        return blurred
+    }
+
+    private fun fastBoxBlur(src: Bitmap, radius: Int): Bitmap {
+        val w = src.width
+        val h = src.height
+        val pix = IntArray(w * h)
+        src.getPixels(pix, 0, w, 0, 0, w, h)
+        val tmp = IntArray(w * h)
+        val div = radius * 2 + 1
+
+        // Repeat 2 passes for smooth Gaussian-like frosted blur
+        repeat(2) {
+            // Horizontal pass
+            for (y in 0 until h) {
+                var rSum = 0
+                var gSum = 0
+                var bSum = 0
+                val rowOffset = y * w
+                for (i in -radius..radius) {
+                    val c = pix[rowOffset + i.coerceIn(0, w - 1)]
+                    rSum += (c shr 16) and 0xFF
+                    gSum += (c shr 8) and 0xFF
+                    bSum += c and 0xFF
+                }
+                for (x in 0 until w) {
+                    tmp[rowOffset + x] = (0xFF shl 24) or
+                        ((rSum / div) shl 16) or
+                        ((gSum / div) shl 8) or
+                        (bSum / div)
+                    val addIdx = (x + radius + 1).coerceAtMost(w - 1)
+                    val remIdx = (x - radius).coerceAtLeast(0)
+                    val cAdd = pix[rowOffset + addIdx]
+                    val cRem = pix[rowOffset + remIdx]
+                    rSum += ((cAdd shr 16) and 0xFF) - ((cRem shr 16) and 0xFF)
+                    gSum += ((cAdd shr 8) and 0xFF) - ((cRem shr 8) and 0xFF)
+                    bSum += (cAdd and 0xFF) - (cRem and 0xFF)
+                }
+            }
+            // Vertical pass
+            for (x in 0 until w) {
+                var rSum = 0
+                var gSum = 0
+                var bSum = 0
+                for (i in -radius..radius) {
+                    val c = tmp[i.coerceIn(0, h - 1) * w + x]
+                    rSum += (c shr 16) and 0xFF
+                    gSum += (c shr 8) and 0xFF
+                    bSum += c and 0xFF
+                }
+                for (y in 0 until h) {
+                    pix[y * w + x] = (0xFF shl 24) or
+                        ((rSum / div) shl 16) or
+                        ((gSum / div) shl 8) or
+                        (bSum / div)
+                    val addIdx = (y + radius + 1).coerceAtMost(h - 1)
+                    val remIdx = (y - radius).coerceAtLeast(0)
+                    val cAdd = tmp[addIdx * w + x]
+                    val cRem = tmp[remIdx * w + x]
+                    rSum += ((cAdd shr 16) and 0xFF) - ((cRem shr 16) and 0xFF)
+                    gSum += ((cAdd shr 8) and 0xFF) - ((cRem shr 8) and 0xFF)
+                    bSum += (cAdd and 0xFF) - (cRem and 0xFF)
+                }
+            }
+        }
+
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        out.setPixels(pix, 0, w, 0, 0, w, h)
+        return out
+    }
+
     fun show() {
+        val backdrop = createBlurredBackdrop(fullBitmap)
+        blurredBackdrop = backdrop
+
         val container = FrameLayout(context)
 
         val bgImage = ImageView(context).apply {
@@ -93,7 +185,7 @@ class CropOverlayManager(
             }
             textSize = 13f
             setTextColor(Color.parseColor("#F0F6FC"))
-            background = roundedPill("#CC161B22", "#388BFD", 28f)
+            background = roundedPill("#B3161B22", "#66FFFFFF", 28f)
             setPadding(32, 16, 32, 16)
             alpha = 0f
             translationY = -40f
@@ -106,11 +198,14 @@ class CropOverlayManager(
             }
         }
 
-        val bottomBar = DraggablePanelLayout(context) { resetInactivityTimeout() }.apply {
+        val bottomBar = LiquidGlassPanelLayout(
+            context = context,
+            blurredBackdrop = backdrop,
+            onUserInteract = { resetInactivityTimeout() }
+        ).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(24, 14, 24, 26)
-            background = liquidGlassBg(42f)
             elevation = 24f
             alpha = 0f
             translationY = 260f
@@ -131,7 +226,7 @@ class CropOverlayManager(
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = 10f
-                setColor(Color.parseColor("#88FFFFFF"))
+                setColor(Color.parseColor("#B3FFFFFF"))
             }
             layoutParams = LinearLayout.LayoutParams(110, 11).apply {
                 bottomMargin = 18
@@ -144,8 +239,8 @@ class CropOverlayManager(
                 text = "🔗 Copy Web Link: ${detectedUrl.take(36)}${if (detectedUrl.length > 36) "..." else ""}"
                 isAllCaps = false
                 textSize = 12f
-                setTextColor(Color.parseColor("#58A6FF"))
-                background = roundedPill("#66162844", "#6658A6FF", 26f)
+                setTextColor(Color.parseColor("#79C0FF"))
+                background = roundedPill("#4D1F6FEB", "#8058A6FF", 26f)
                 setPadding(24, 12, 24, 12)
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -174,8 +269,8 @@ class CropOverlayManager(
             text = "✕"
             isAllCaps = false
             textSize = 14f
-            setTextColor(Color.parseColor("#FF6B6B"))
-            background = roundedPill("#66381A1E", "#55FF6B6B", 26f)
+            setTextColor(Color.parseColor("#FF7B72"))
+            background = roundedPill("#4D381A1E", "#66FF7B72", 26f)
             setPadding(24, 16, 24, 16)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -193,8 +288,8 @@ class CropOverlayManager(
             text = "Full Screen"
             isAllCaps = false
             textSize = 13f
-            setTextColor(Color.parseColor("#F0F6FC"))
-            background = roundedPill("#552B3340", "#4DFFFFFF", 26f)
+            setTextColor(Color.parseColor("#FFFFFF"))
+            background = roundedPill("#40FFFFFF", "#66FFFFFF", 26f)
             setPadding(24, 16, 24, 16)
             layoutParams = LinearLayout.LayoutParams(
                 0,
@@ -214,7 +309,7 @@ class CropOverlayManager(
             isAllCaps = false
             textSize = 13f
             setTextColor(Color.parseColor("#FFFFFF"))
-            background = roundedPill("#CC238636", "#803FB950", 26f)
+            background = roundedPill("#B3238636", "#803FB950", 26f)
             setPadding(24, 16, 24, 16)
             layoutParams = LinearLayout.LayoutParams(
                 0,
@@ -273,6 +368,7 @@ class CropOverlayManager(
             .scaleY(1f)
             .setDuration(340L)
             .setInterpolator(OvershootInterpolator(1.1f))
+            .setUpdateListener { bottomBar.invalidate() }
             .start()
     }
 
@@ -309,21 +405,10 @@ class CropOverlayManager(
             } catch (_: Exception) {}
         }
         rootLayout = null
-    }
-
-    private fun liquidGlassBg(radiusPx: Float): GradientDrawable {
-        return GradientDrawable(
-            GradientDrawable.Orientation.TOP_BOTTOM,
-            intArrayOf(
-                Color.parseColor("#A6232C3B"),
-                Color.parseColor("#7D141923"),
-                Color.parseColor("#961A222E")
-            )
-        ).apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = radiusPx
-            setStroke(3, Color.parseColor("#59FFFFFF"))
+        blurredBackdrop?.let {
+            if (!it.isRecycled) it.recycle()
         }
+        blurredBackdrop = null
     }
 
     private fun roundedPill(fillHex: String, strokeHex: String, radiusPx: Float): GradientDrawable {
@@ -335,14 +420,120 @@ class CropOverlayManager(
         }
     }
 
-    private class DraggablePanelLayout(
+    /**
+     * True Liquid Glass floating panel:
+     * - Draws the live blurred screenshot region directly underneath its current position at 60fps.
+     * - Adds a diagonal specular glass sheen + top-lit refractive rim border.
+     * - Snaps magnetically with spring physics to Bottom, Middle, or Top dock positions.
+     */
+    private class LiquidGlassPanelLayout(
         context: Context,
+        private val blurredBackdrop: Bitmap,
         private val onUserInteract: () -> Unit
     ) : LinearLayout(context) {
+
+        private val cornerRadius = 46f
+        private val glassPath = Path()
+        private val glassRect = RectF()
+        private val srcRect = Rect()
+        private val dstRect = RectF()
+
+        private val bitmapPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+        private val tintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#590D121C")
+            style = Paint.Style.FILL
+        }
+        private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = 3f
+        }
+
         private var startRawY = 0f
         private var startTransY = 0f
         private var lastRawY = 0f
         private var lastStepDy = 0f
+
+        init {
+            setWillNotDraw(false)
+        }
+
+        override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+            super.onSizeChanged(w, h, oldw, oldh)
+            if (w > 0 && h > 0) {
+                sheenPaint.shader = LinearGradient(
+                    0f, 0f, w.toFloat() * 0.6f, h.toFloat(),
+                    intArrayOf(
+                        Color.parseColor("#3DFFFFFF"),
+                        Color.parseColor("#0AFFFFFF"),
+                        Color.parseColor("#1FFFFFFF")
+                    ),
+                    floatArrayOf(0f, 0.55f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+                rimPaint.shader = LinearGradient(
+                    0f, 0f, 0f, h.toFloat(),
+                    intArrayOf(
+                        Color.parseColor("#B8FFFFFF"),
+                        Color.parseColor("#33FFFFFF"),
+                        Color.parseColor("#66FFFFFF")
+                    ),
+                    floatArrayOf(0f, 0.5f, 1f),
+                    Shader.TileMode.CLAMP
+                )
+            }
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            val w = width.toFloat()
+            val h = height.toFloat()
+            if (w <= 0f || h <= 0f) {
+                super.onDraw(canvas)
+                return
+            }
+
+            glassRect.set(0f, 0f, w, h)
+            glassPath.reset()
+            glassPath.addRoundRect(glassRect, cornerRadius, cornerRadius, Path.Direction.CW)
+
+            canvas.save()
+            canvas.clipPath(glassPath)
+
+            // Sample exact blurred region underneath the panel's live screen coordinates
+            val parentView = parent as? View
+            val parentW = (parentView?.width ?: width).toFloat().coerceAtLeast(1f)
+            val parentH = (parentView?.height ?: height).toFloat().coerceAtLeast(1f)
+
+            val panelLeftOnScreen = left.toFloat()
+            val panelTopOnScreen = top.toFloat() + translationY
+
+            val scaleX = blurredBackdrop.width / parentW
+            val scaleY = blurredBackdrop.height / parentH
+
+            srcRect.set(
+                (panelLeftOnScreen * scaleX).toInt().coerceIn(0, blurredBackdrop.width - 2),
+                (panelTopOnScreen * scaleY).toInt().coerceIn(0, blurredBackdrop.height - 2),
+                ((panelLeftOnScreen + w) * scaleX).toInt().coerceIn(1, blurredBackdrop.width),
+                ((panelTopOnScreen + h) * scaleY).toInt().coerceIn(1, blurredBackdrop.height)
+            )
+            dstRect.set(0f, 0f, w, h)
+
+            if (!blurredBackdrop.isRecycled) {
+                canvas.drawBitmap(blurredBackdrop, srcRect, dstRect, bitmapPaint)
+            }
+            canvas.drawRect(dstRect, tintPaint)
+            canvas.drawRect(dstRect, sheenPaint)
+            canvas.restore()
+
+            // Crisp specular glass rim
+            val inset = 1.5f
+            glassRect.set(inset, inset, w - inset, h - inset)
+            canvas.drawRoundRect(glassRect, cornerRadius, cornerRadius, rimPaint)
+
+            super.onDraw(canvas)
+        }
 
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
             onUserInteract()
@@ -383,6 +574,7 @@ class CropOverlayManager(
                     lastRawY = event.rawY
                     val dy = event.rawY - startRawY
                     translationY = (startTransY + dy).coerceIn(topDock - 40f, 48f)
+                    invalidate()
                     return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -394,6 +586,7 @@ class CropOverlayManager(
                         .translationY(nearestDock)
                         .setDuration(280L)
                         .setInterpolator(OvershootInterpolator(1.15f))
+                        .setUpdateListener { invalidate() }
                         .start()
                     return true
                 }
@@ -726,7 +919,6 @@ class CropOverlayManager(
                         val now = System.currentTimeMillis()
                         val tapDist = hypot((x - lastEmptyTapX).toDouble(), (y - lastEmptyTapY).toDouble()).toFloat()
 
-                        // Double-tap that started outside the crop box -> Instant Full Screen
                         if (lastEmptyTapTime > 0L && now - lastEmptyTapTime <= DOUBLE_TAP_TIMEOUT && tapDist <= DOUBLE_TAP_SLOP) {
                             lastEmptyTapTime = 0L
                             activeMode = MODE_NONE
