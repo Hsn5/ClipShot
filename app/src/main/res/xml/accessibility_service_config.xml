@@ -2,6 +2,7 @@
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityEventTypes="typeNotificationStateChanged"
+    android:accessibilityFlags="flagDefault|flagRequestAccessibilityButton|flagRequestFilterKeyEvents"
     android:canPerformGestures="false"
     android:canRetrieveWindowContent="true"
     android:canRequestFilterKeyEvents="true"
