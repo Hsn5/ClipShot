@@ -1,4 +1,4 @@
-package com.example.clipshot
+package com.example.Cropboard
 
 import android.app.Activity
 import android.app.Dialog
