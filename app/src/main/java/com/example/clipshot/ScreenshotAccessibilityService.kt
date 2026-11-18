@@ -306,24 +306,37 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         out: MutableList<RectF>,
         seen: HashSet<String>
     ) {
-        if (node == null || depth > 12 || out.size >= 140) return
+        if (node == null || depth > 12 || out.size >= 80) return
 
         if (node.isVisibleToUser) {
-            val r = Rect()
-            node.getBoundsInScreen(r)
-            val w = r.width()
-            val h = r.height()
-            if (w >= 90 && h >= 70 && (w < screenW * 0.97f || h < screenH * 0.90f)) {
-                val clamped = RectF(
-                    r.left.toFloat().coerceIn(0f, screenW.toFloat()),
-                    r.top.toFloat().coerceIn(0f, screenH.toFloat()),
-                    r.right.toFloat().coerceIn(0f, screenW.toFloat()),
-                    r.bottom.toFloat().coerceIn(0f, screenH.toFloat())
-                )
-                if (clamped.width() >= 90f && clamped.height() >= 70f) {
-                    val key = "${clamped.left.toInt()}_${clamped.top.toInt()}_${clamped.right.toInt()}_${clamped.bottom.toInt()}"
-                    if (seen.add(key)) {
-                        out.add(clamped)
+            val cls = node.className?.toString() ?: ""
+            val isMeaningful = node.isClickable ||
+                cls.contains("Image", ignoreCase = true) ||
+                cls.contains("TextView", ignoreCase = true) ||
+                cls.contains("Card", ignoreCase = true) ||
+                cls.contains("WebView", ignoreCase = true) ||
+                cls.contains("Video", ignoreCase = true) ||
+                !node.text.isNullOrBlank() ||
+                !node.contentDescription.isNullOrBlank() ||
+                node.childCount == 0
+
+            if (isMeaningful) {
+                val r = Rect()
+                node.getBoundsInScreen(r)
+                val w = r.width()
+                val h = r.height()
+                if (w >= 110 && h >= 80 && !(w > screenW * 0.93f && h > screenH * 0.78f)) {
+                    val clamped = RectF(
+                        r.left.toFloat().coerceIn(0f, screenW.toFloat()),
+                        r.top.toFloat().coerceIn(0f, screenH.toFloat()),
+                        r.right.toFloat().coerceIn(0f, screenW.toFloat()),
+                        r.bottom.toFloat().coerceIn(0f, screenH.toFloat())
+                    )
+                    if (clamped.width() >= 110f && clamped.height() >= 80f) {
+                        val key = "${(clamped.left / 16).toInt()}_${(clamped.top / 16).toInt()}_${(clamped.right / 16).toInt()}_${(clamped.bottom / 16).toInt()}"
+                        if (seen.add(key)) {
+                            out.add(clamped)
+                        }
                     }
                 }
             }
