@@ -12,7 +12,7 @@
   - **Tap-to-Snap & Magnetic Edges:** Tap any UI card, image, or post to snap the crop box to its exact bounds, with magnetic edge alignment while resizing.
   - **Live Pixel Magnifier Loupe:** Circular zoom loupe above your finger when dragging corners or edges.
   - **Draggable Floating Bar:** Lift the bottom action bar out of the way when cropping the lower screen.
-  - **Double-Tap Outside = Full Screen:** Quickly double-tap the dimmed area outside the selection to copy the full screen immediately.
+  
 - 📋 **Zero Gallery Clutter:**
   - Screenshots are copied directly to `ClipboardManager` and stored in an isolated internal vault (`filesDir/vault` with `.nomedia` and `allowBackup="false"`).
   - Nothing ever touches your Photo Gallery or MediaStore unless you tap **Save to Gallery**.
