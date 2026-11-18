@@ -2,7 +2,6 @@ package com.example.clipshot
 
 import android.accessibilityservice.AccessibilityButtonController
 import android.accessibilityservice.AccessibilityService
-import android.app.Notification
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -29,10 +28,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
     companion object {
         const val ACTION_VAULT_UPDATED = "com.example.clipshot.ACTION_VAULT_UPDATED"
 
-        // Unique markers so normal notifications containing "clipshot" (e.g. GitHub/Gmail) NEVER trigger
-        private const val TRIGGER_SHOT_TOKEN = "##clipshot##"
-        private const val TRIGGER_URL_TOKEN = "##clipurl##"
-
         var instance: ScreenshotAccessibilityService? = null
             private set
 
@@ -54,23 +49,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
             }, delayMs)
         }
 
-        fun copyUrlNow() {
-            val service = instance ?: return
-            val now = System.currentTimeMillis()
-            if (now - lastGlobalTriggerTime < 1400L) return
-            lastGlobalTriggerTime = now
-
-            service.mainHandler.post {
-                val url = service.extractCurrentBrowserUrl()
-                if (url != null) {
-                    service.copyPlainTextToClipboard(url)
-                    service.showToast("URL copied: $url")
-                } else {
-                    service.showToast("No web URL found on current screen")
-                }
-            }
-        }
-
         fun collapseShadeAndCapture() {
             val service = instance ?: return
             service.performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
@@ -80,6 +58,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val ioExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private var activeOverlay: CropOverlayManager? = null
 
     private var pendingSingleTap = false
     private var isVolumeDownHeld = false
@@ -131,6 +110,8 @@ class ScreenshotAccessibilityService : AccessibilityService() {
 
     private fun cleanupService() {
         mainHandler.removeCallbacksAndMessages(null)
+        activeOverlay?.cancel()
+        activeOverlay = null
         try {
             accessibilityButtonController.unregisterAccessibilityButtonCallback(buttonCallback)
         } catch (_: Exception) {}
@@ -177,19 +158,17 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         } catch (_: Exception) {}
     }
 
+    /**
+     * Dismisses the active crop overlay if another window (e.g. Home/Launcher, Recents, or another app)
+     * comes to the foreground while the overlay is visible.
+     */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType != AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED) return
-        if (event.packageName?.toString() == packageName) return
-        if (event.parcelableData !is Notification) return
+        if (!isOverlayShowing || event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val pkg = event.packageName?.toString() ?: return
+        if (pkg == packageName || pkg == "com.android.systemui") return
 
-        val text = event.text?.joinToString(" ")?.lowercase() ?: ""
-        val contentDesc = event.contentDescription?.toString()?.lowercase() ?: ""
-        val combined = "$text $contentDesc"
-
-        if (combined.contains(TRIGGER_URL_TOKEN)) {
-            mainHandler.postDelayed({ copyUrlNow() }, 150L)
-        } else if (combined.contains(TRIGGER_SHOT_TOKEN)) {
-            captureNow(delayMs = 150L, openCropOverlay = true)
+        mainHandler.post {
+            activeOverlay?.cancel()
         }
     }
 
@@ -218,32 +197,46 @@ class ScreenshotAccessibilityService : AccessibilityService() {
                             if (openCropOverlay) {
                                 mainHandler.post {
                                     isOverlayShowing = true
-                                    CropOverlayManager(
-                                        context = this@ScreenshotAccessibilityService,
-                                        fullBitmap = softwareBitmap,
-                                        detectedUrl = detectedUrl,
-                                        smartBounds = smartBounds,
-                                        onResultBitmap = { finalBitmap ->
-                                            isOverlayShowing = false
-                                            saveFinalBitmapAsync(finalBitmap, detectedUrl)
-                                        },
-                                        onCopyUrlOnly = { url ->
-                                            isOverlayShowing = false
-                                            softwareBitmap.recycle()
-                                            copyPlainTextToClipboard(url)
-                                            showToast("Web URL copied to clipboard 🔗")
-                                        },
-                                        onCancel = {
-                                            isOverlayShowing = false
-                                            softwareBitmap.recycle()
-                                        }
-                                    ).show()
+                                    try {
+                                        val overlay = CropOverlayManager(
+                                            context = this@ScreenshotAccessibilityService,
+                                            fullBitmap = softwareBitmap,
+                                            detectedUrl = detectedUrl,
+                                            smartBounds = smartBounds,
+                                            onResultBitmap = { finalBitmap ->
+                                                activeOverlay = null
+                                                isOverlayShowing = false
+                                                saveFinalBitmapAsync(finalBitmap, detectedUrl)
+                                            },
+                                            onCopyUrlOnly = { url ->
+                                                activeOverlay = null
+                                                isOverlayShowing = false
+                                                if (!softwareBitmap.isRecycled) softwareBitmap.recycle()
+                                                copyPlainTextToClipboard(url)
+                                                showToast("Web URL copied to clipboard 🔗")
+                                            },
+                                            onCancel = {
+                                                activeOverlay = null
+                                                isOverlayShowing = false
+                                                if (!softwareBitmap.isRecycled) softwareBitmap.recycle()
+                                            }
+                                        )
+                                        activeOverlay = overlay
+                                        overlay.show()
+                                    } catch (e: Exception) {
+                                        activeOverlay = null
+                                        isOverlayShowing = false
+                                        if (!softwareBitmap.isRecycled) softwareBitmap.recycle()
+                                        e.printStackTrace()
+                                        showToast("Couldn't open crop overlay")
+                                    }
                                 }
                             } else {
                                 saveFinalBitmapAsync(softwareBitmap, detectedUrl)
                             }
                         }
                     } catch (e: Exception) {
+                        activeOverlay = null
                         isOverlayShowing = false
                         e.printStackTrace()
                         showToast("Failed to process screenshot")
@@ -251,6 +244,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
                 }
 
                 override fun onFailure(errorCode: Int) {
+                    activeOverlay = null
                     isOverlayShowing = false
                     showToast("Screenshot failed (Error code: $errorCode)")
                 }
@@ -267,7 +261,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
                     sourceUrl
                 )
             } finally {
-                bitmap.recycle()
+                if (!bitmap.isRecycled) bitmap.recycle()
             }
             mainHandler.post {
                 sendBroadcast(Intent(ACTION_VAULT_UPDATED).setPackage(packageName))
@@ -306,7 +300,7 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         out: MutableList<RectF>,
         seen: HashSet<String>
     ) {
-        if (node == null || depth > 12 || out.size >= 80) return
+        if (node == null || depth > 12 || out.size >= 250) return
 
         if (node.isVisibleToUser) {
             val cls = node.className?.toString() ?: ""
@@ -397,7 +391,6 @@ class ScreenshotAccessibilityService : AccessibilityService() {
         }
         if (Patterns.WEB_URL.matcher(raw).matches() && raw.contains(".")) {
             if (!strict) return "https://$raw"
-            // In fallback EditText scan, avoid false positives like "main.py" or "app.kt"
             val commonWebTlds = listOf(".com", ".org", ".net", ".io", ".dev", ".edu", ".gov", ".co", ".me", ".app", ".ai", "/")
             if (commonWebTlds.any { raw.contains(it, ignoreCase = true) }) {
                 return "https://$raw"
