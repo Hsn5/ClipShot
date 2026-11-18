@@ -16,6 +16,8 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -32,13 +34,6 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
-/**
- * Smart Samsung-style Crop Overlay:
- * - Tap any UI card, image, or post to smoothly auto-snap the crop box to its exact bounds.
- * - Double-tap in empty space (outside the crop box) for instant Full Screen capture.
- * - Magnetic edge snapping + live circular pixel magnifier loupe while resizing.
- * - Floating draggable bottom action panel with smooth spring entrance animation.
- */
 class CropOverlayManager(
     private val context: Context,
     private val fullBitmap: Bitmap,
@@ -49,7 +44,18 @@ class CropOverlayManager(
     private val onCancel: () -> Unit
 ) {
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+    private val timeoutHandler = Handler(Looper.getMainLooper())
     private var rootLayout: FrameLayout? = null
+
+    private val autoDismissRunnable = Runnable {
+        dismiss()
+        onCancel()
+    }
+
+    private fun resetInactivityTimeout() {
+        timeoutHandler.removeCallbacks(autoDismissRunnable)
+        timeoutHandler.postDelayed(autoDismissRunnable, 25_000L)
+    }
 
     fun show() {
         val container = FrameLayout(context)
@@ -67,6 +73,7 @@ class CropOverlayManager(
             context = context,
             fullBitmap = fullBitmap,
             smartBounds = smartBounds,
+            onUserInteract = { resetInactivityTimeout() },
             onDoubleTapFullScreen = {
                 dismiss()
                 onResultBitmap(fullBitmap)
@@ -99,7 +106,7 @@ class CropOverlayManager(
             }
         }
 
-        val bottomBar = DraggablePanelLayout(context).apply {
+        val bottomBar = DraggablePanelLayout(context) { resetInactivityTimeout() }.apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(24, 14, 24, 28)
@@ -250,6 +257,7 @@ class CropOverlayManager(
 
         rootLayout = container
         windowManager.addView(container, params)
+        resetInactivityTimeout()
 
         topHint.animate()
             .alpha(1f)
@@ -294,6 +302,7 @@ class CropOverlayManager(
     }
 
     fun dismiss() {
+        timeoutHandler.removeCallbacks(autoDismissRunnable)
         rootLayout?.let {
             try {
                 windowManager.removeView(it)
@@ -311,11 +320,15 @@ class CropOverlayManager(
         }
     }
 
-    private class DraggablePanelLayout(context: Context) : LinearLayout(context) {
+    private class DraggablePanelLayout(
+        context: Context,
+        private val onUserInteract: () -> Unit
+    ) : LinearLayout(context) {
         private var startRawY = 0f
         private var startTransY = 0f
 
         override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+            onUserInteract()
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startRawY = ev.rawY
@@ -364,6 +377,7 @@ class CropOverlayManager(
         context: Context,
         private val fullBitmap: Bitmap,
         private val smartBounds: List<RectF>,
+        private val onUserInteract: () -> Unit,
         private val onDoubleTapFullScreen: () -> Unit
     ) : View(context) {
 
@@ -423,9 +437,9 @@ class CropOverlayManager(
         private var lastY = 0f
         private var movedDistance = 0f
 
-        private var lastOutsideTapTime = 0L
-        private var lastOutsideTapX = 0f
-        private var lastOutsideTapY = 0f
+        private var lastEmptyTapTime = 0L
+        private var lastEmptyTapX = 0f
+        private var lastEmptyTapY = 0f
 
         private var showLoupe = false
         private var loupeX = 0f
@@ -582,6 +596,7 @@ class CropOverlayManager(
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
+            onUserInteract()
             val x = event.x.coerceIn(0f, width.toFloat())
             val y = event.y.coerceIn(0f, height.toFloat())
 
@@ -680,25 +695,26 @@ class CropOverlayManager(
 
                     if (movedDistance <= TAP_SLOP) {
                         val now = System.currentTimeMillis()
-                        val tapDist = hypot((x - lastOutsideTapX).toDouble(), (y - lastOutsideTapY).toDouble()).toFloat()
+                        val tapDist = hypot((x - lastEmptyTapX).toDouble(), (y - lastEmptyTapY).toDouble()).toFloat()
 
-                        // Double-tap in empty space (outside the crop box) -> Instant Full Screen!
-                        if (activeMode == MODE_NEW || (now - lastOutsideTapTime <= DOUBLE_TAP_TIMEOUT && tapDist <= DOUBLE_TAP_SLOP)) {
-                            if (now - lastOutsideTapTime <= DOUBLE_TAP_TIMEOUT && tapDist <= DOUBLE_TAP_SLOP) {
-                                lastOutsideTapTime = 0L
+                        // Only treat as double-tap Full Screen if tapping outside (and not snapping twice on the same smart card)
+                        if (activeMode == MODE_NEW) {
+                            if (now - lastEmptyTapTime <= DOUBLE_TAP_TIMEOUT && tapDist <= DOUBLE_TAP_SLOP) {
+                                lastEmptyTapTime = 0L
                                 activeMode = MODE_NONE
                                 onDoubleTapFullScreen()
                                 return true
-                            } else if (activeMode == MODE_NEW) {
-                                lastOutsideTapTime = now
-                                lastOutsideTapX = x
-                                lastOutsideTapY = y
                             }
+                            lastEmptyTapTime = now
+                            lastEmptyTapX = x
+                            lastEmptyTapY = y
                         }
 
                         if (smartBounds.isNotEmpty()) {
                             val target = findBestSmartTarget(x, y)
                             if (target != null) {
+                                // Clear empty-tap timer if a smart element was snapped so a 2nd tap on it doesn't trigger Full Screen
+                                lastEmptyTapTime = 0L
                                 activeMode = MODE_NONE
                                 animateCropTo(target)
                                 return true
@@ -733,7 +749,7 @@ class CropOverlayManager(
                     abs(cand.bottom - cropRect.bottom) < 12f
                 if (!sameAsCurrent) return cand
             }
-            return candidates.first()
+            return null
         }
 
         private fun animateCropTo(target: RectF) {
