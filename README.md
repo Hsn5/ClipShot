@@ -28,12 +28,9 @@
 
 ## ⚡ Triggers
 
-- **Quick Settings Tile:** Tap **ClipShot** in your notification shade (auto-collapses shade before capture).
+- **Quick Settings Tile:** Tap 
 - **Double-Tap Volume Down:** Quickly double-tap Volume Down (with 260ms debouncing so the system volume bar doesn't photobomb your shot).
-- **Samsung Modes & Routines (Zero-Exit Trigger):**
-  - Use **Notifications → Show custom notification** with:
-    - `##clipshot##` → Opens Smart Crop Overlay
-    - `##clipurl##` → Copies the active browser URL directly to clipboard
+
 - **Accessibility Button:** Assign ClipShot to the floating Accessibility button or navigation bar shortcut.
 
 ---
