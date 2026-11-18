@@ -1,4 +1,4 @@
-# 📸 ClipShot
+# 📸 Cropboard
 
 > **Smart, gallery-free screenshot & URL utility for Android.**  
 > Capture full or cropped regions straight to your clipboard, extract web links, and keep temporary shots in a 24-hour private vault — without cluttering your Photo Gallery.
