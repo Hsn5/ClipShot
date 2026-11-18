@@ -165,7 +165,7 @@ class MainActivity : Activity() {
         vaultHeaderRow.addView(clearUnpinnedBtn)
 
         val vaultHintText = TextView(this).apply {
-            text = "Triggers: ##clipshot## notification (Crop/Full) • ##clipurl## notification (Web Link) • Double-Tap Vol Down • Quick Tile."
+            text = "Triggers: Double-Tap Vol Down • Quick Tile • Accessibility Button • Launcher Shortcut."
             textSize = 12f
             setTextColor(Color.parseColor("#8B949E"))
             setPadding(0, 0, 0, dp(12))
