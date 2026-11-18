@@ -61,7 +61,7 @@ class MainActivity : Activity() {
         }
 
         val titleText = TextView(this).apply {
-            text = "Cropboard v9.0"
+            text = "Cropboard v1.0"
             textSize = 28f
             setTextColor(Color.parseColor("#FFFFFF"))
             gravity = Gravity.CENTER
