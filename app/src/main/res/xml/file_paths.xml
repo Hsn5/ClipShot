@@ -1,8 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <cache-path
-        name="clipboard_cache"
-        path="screenshots/" />
     <files-path
         name="private_vault"
         path="vault/" />
