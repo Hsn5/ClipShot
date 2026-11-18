@@ -8,8 +8,9 @@ import android.widget.Toast
 class TriggerScreenshotService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val openCrop = intent?.getBooleanExtra("open_crop", true) ?: true
         if (ScreenshotAccessibilityService.instance != null) {
-            ScreenshotAccessibilityService.captureNow(delayMs = 50L)
+            ScreenshotAccessibilityService.captureNow(delayMs = 50L, openCropOverlay = openCrop)
         } else {
             Toast.makeText(
                 applicationContext,
