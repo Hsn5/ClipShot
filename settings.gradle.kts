@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "ClipShot"
+rootProject.name = "Cropboard"
 include(":app")
