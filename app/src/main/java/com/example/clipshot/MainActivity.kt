@@ -1,4 +1,4 @@
-package com.example.Cropboard
+package com.example.clipshot
 
 import android.app.Activity
 import android.app.Dialog
@@ -61,7 +61,7 @@ class MainActivity : Activity() {
         }
 
         val titleText = TextView(this).apply {
-            text = "ClipShot v8.0"
+            text = "Cropboard v9.0"
             textSize = 28f
             setTextColor(Color.parseColor("#FFFFFF"))
             gravity = Gravity.CENTER
@@ -223,7 +223,7 @@ class MainActivity : Activity() {
             statusText.text = "✅ Service Active (Smart Crop • Web URL • Double-Tap Vol Down • Quick Tile)"
             statusText.setTextColor(Color.parseColor("#4CAF50"))
         } else {
-            statusText.text = "⚠️ Service NOT enabled. Tap 'Accessibility' to enable ClipShot."
+            statusText.text = "⚠️ Service NOT enabled. Tap 'Accessibility' to enable Cropboard."
             statusText.setTextColor(Color.parseColor("#FF5252"))
         }
     }
@@ -415,7 +415,7 @@ class MainActivity : Activity() {
                 thumbExecutor.execute {
                     val saved = ScreenshotVaultManager.saveToGallery(this@MainActivity, item)
                     runOnUiThread {
-                        val msg = if (saved) "Saved to Gallery (Pictures/ClipShot) 🖼️" else "Failed to save to Gallery"
+                        val msg = if (saved) "Saved to Gallery (Pictures/Cropboard) 🖼️" else "Failed to save to Gallery"
                         Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -625,7 +625,7 @@ class MainActivity : Activity() {
                 thumbExecutor.execute {
                     val saved = ScreenshotVaultManager.saveToGallery(this@MainActivity, item)
                     runOnUiThread {
-                        val msg = if (saved) "Saved to Gallery (Pictures/ClipShot) 🖼️" else "Failed to save to Gallery"
+                        val msg = if (saved) "Saved to Gallery (Pictures/Cropboard) 🖼️" else "Failed to save to Gallery"
                         Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
                     }
                 }
