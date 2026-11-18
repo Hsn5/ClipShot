@@ -19,6 +19,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -39,7 +40,8 @@ import kotlin.math.min
  * - Tap any UI card, image, or post to smoothly auto-snap the crop box to its exact bounds.
  * - Double-tap outside the crop box for instant Full Screen capture.
  * - Live circular pixel magnifier loupe while resizing corners or edges.
- * - True Liquid Glass draggable bottom panel with live blurred backdrop refraction & magnetic 3-stop snapping.
+ * - True Liquid Glass draggable bottom panel with live blurred backdrop refraction & magnetic two-stop snapping (bottom and top).
+ * - Focusable overlay root handles Back key/gesture cleanly; idempotent dismiss/cancel with 25s inactivity timeout.
  */
 class CropOverlayManager(
     private val context: Context,
@@ -55,20 +57,19 @@ class CropOverlayManager(
     private var rootLayout: FrameLayout? = null
     private var blurredBackdrop: Bitmap? = null
 
+    @Volatile
+    private var isDismissed = false
+
     private val autoDismissRunnable = Runnable {
-        dismiss()
-        onCancel()
+        cancel()
     }
 
     private fun resetInactivityTimeout() {
+        if (isDismissed) return
         timeoutHandler.removeCallbacks(autoDismissRunnable)
         timeoutHandler.postDelayed(autoDismissRunnable, 25_000L)
     }
 
-    /**
-     * Generates a fast downscaled & multi-pass blurred copy of the screenshot (< 4ms)
-     * so the floating Liquid Glass panel refracts the real live background as you drag it.
-     */
     private fun createBlurredBackdrop(src: Bitmap): Bitmap {
         val w = (src.width / 8).coerceAtLeast(32)
         val h = (src.height / 8).coerceAtLeast(32)
@@ -86,9 +87,7 @@ class CropOverlayManager(
         val tmp = IntArray(w * h)
         val div = radius * 2 + 1
 
-        // Repeat 2 passes for smooth Gaussian-like frosted blur
         repeat(2) {
-            // Horizontal pass
             for (y in 0 until h) {
                 var rSum = 0
                 var gSum = 0
@@ -114,7 +113,6 @@ class CropOverlayManager(
                     bSum += (cAdd and 0xFF) - (cRem and 0xFF)
                 }
             }
-            // Vertical pass
             for (x in 0 until w) {
                 var rSum = 0
                 var gSum = 0
@@ -150,7 +148,18 @@ class CropOverlayManager(
         val backdrop = createBlurredBackdrop(fullBitmap)
         blurredBackdrop = backdrop
 
-        val container = FrameLayout(context)
+        val container = object : FrameLayout(context) {
+            override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
+                    cancel()
+                    return true
+                }
+                return super.dispatchKeyEvent(event)
+            }
+        }.apply {
+            isFocusable = true
+            isFocusableInTouchMode = true
+        }
 
         val bgImage = ImageView(context).apply {
             setImageBitmap(fullBitmap)
@@ -167,8 +176,11 @@ class CropOverlayManager(
             smartBounds = smartBounds,
             onUserInteract = { resetInactivityTimeout() },
             onDoubleTapFullScreen = {
-                dismiss()
-                onResultBitmap(fullBitmap)
+                if (!isDismissed) {
+                    isDismissed = true
+                    dismiss()
+                    onResultBitmap(fullBitmap)
+                }
             }
         ).apply {
             layoutParams = FrameLayout.LayoutParams(
@@ -249,8 +261,11 @@ class CropOverlayManager(
                     bottomMargin = 14
                 }
                 setOnClickListener {
-                    dismiss()
-                    onCopyUrlOnly(detectedUrl)
+                    if (!isDismissed) {
+                        isDismissed = true
+                        dismiss()
+                        onCopyUrlOnly(detectedUrl)
+                    }
                 }
             }
             bottomBar.addView(urlBtn)
@@ -279,8 +294,7 @@ class CropOverlayManager(
                 rightMargin = 12
             }
             setOnClickListener {
-                dismiss()
-                onCancel()
+                cancel()
             }
         }
 
@@ -299,8 +313,11 @@ class CropOverlayManager(
                 rightMargin = 12
             }
             setOnClickListener {
-                dismiss()
-                onResultBitmap(fullBitmap)
+                if (!isDismissed) {
+                    isDismissed = true
+                    dismiss()
+                    onResultBitmap(fullBitmap)
+                }
             }
         }
 
@@ -317,9 +334,12 @@ class CropOverlayManager(
                 1.2f
             )
             setOnClickListener {
-                val cropped = extractCroppedBitmap(selectionView)
-                dismiss()
-                onResultBitmap(cropped)
+                if (!isDismissed) {
+                    isDismissed = true
+                    val cropped = extractCroppedBitmap(selectionView)
+                    dismiss()
+                    onResultBitmap(cropped)
+                }
             }
         }
 
@@ -333,9 +353,9 @@ class CropOverlayManager(
         container.addView(topHint)
         container.addView(bottomBar)
 
+        // Focusable overlay window (no FLAG_NOT_FOCUSABLE) so One UI Back gesture & Back key hit dispatchKeyEvent
         val flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
 
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -351,7 +371,16 @@ class CropOverlayManager(
         }
 
         rootLayout = container
-        windowManager.addView(container, params)
+        try {
+            windowManager.addView(container, params)
+            container.requestFocus()
+        } catch (e: Exception) {
+            rootLayout = null
+            blurredBackdrop?.let { if (!it.isRecycled) it.recycle() }
+            blurredBackdrop = null
+            throw e
+        }
+
         resetInactivityTimeout()
 
         topHint.animate()
@@ -392,19 +421,33 @@ class CropOverlayManager(
             fullBitmap
         } else {
             val cropped = Bitmap.createBitmap(fullBitmap, left, top, cropW, cropH)
-            fullBitmap.recycle()
+            if (!fullBitmap.isRecycled) fullBitmap.recycle()
             cropped
         }
     }
 
+    /**
+     * Idempotent cancel: dismisses the overlay and invokes onCancel() exactly once.
+     */
+    fun cancel() {
+        if (isDismissed) return
+        isDismissed = true
+        dismiss()
+        onCancel()
+    }
+
+    /**
+     * Idempotent view & backdrop cleanup.
+     */
     fun dismiss() {
         timeoutHandler.removeCallbacks(autoDismissRunnable)
-        rootLayout?.let {
+        val view = rootLayout
+        rootLayout = null
+        if (view != null) {
             try {
-                windowManager.removeView(it)
+                windowManager.removeView(view)
             } catch (_: Exception) {}
         }
-        rootLayout = null
         blurredBackdrop?.let {
             if (!it.isRecycled) it.recycle()
         }
@@ -424,7 +467,7 @@ class CropOverlayManager(
      * True Liquid Glass floating panel:
      * - Draws the live blurred screenshot region directly underneath its current position at 60fps.
      * - Adds a diagonal specular glass sheen + top-lit refractive rim border.
-     * - Snaps magnetically with spring physics to Bottom, Middle, or Top dock positions.
+     * - Snaps magnetically with spring physics to two stops (bottom and top).
      */
     private class LiquidGlassPanelLayout(
         context: Context,
@@ -501,7 +544,6 @@ class CropOverlayManager(
             canvas.save()
             canvas.clipPath(glassPath)
 
-            // Sample exact blurred region underneath the panel's live screen coordinates
             val parentView = parent as? View
             val parentW = (parentView?.width ?: width).toFloat().coerceAtLeast(1f)
             val parentH = (parentView?.height ?: height).toFloat().coerceAtLeast(1f)
@@ -527,7 +569,6 @@ class CropOverlayManager(
             canvas.drawRect(dstRect, sheenPaint)
             canvas.restore()
 
-            // Crisp specular glass rim
             val inset = 1.5f
             glassRect.set(inset, inset, w - inset, h - inset)
             canvas.drawRoundRect(glassRect, cornerRadius, cornerRadius, rimPaint)
@@ -557,7 +598,6 @@ class CropOverlayManager(
         override fun onTouchEvent(event: MotionEvent): Boolean {
             val parentH = (parent as? View)?.height?.toFloat() ?: 2000f
             val topDock = -(parentH - height - 260f).coerceAtLeast(160f)
-            val midDock = topDock * 0.5f
             val bottomDock = 0f
 
             when (event.actionMasked) {
@@ -579,7 +619,7 @@ class CropOverlayManager(
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     val projectedY = (translationY + lastStepDy * 6f).coerceIn(topDock, bottomDock)
-                    val docks = listOf(bottomDock, midDock, topDock)
+                    val docks = listOf(bottomDock, topDock)
                     val nearestDock = docks.minByOrNull { abs(it - projectedY) } ?: bottomDock
 
                     animate()
