@@ -7,8 +7,9 @@ import android.widget.Toast
 
 class TriggerScreenshotReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+        val openCrop = intent.getBooleanExtra("open_crop", true)
         if (ScreenshotAccessibilityService.instance != null) {
-            ScreenshotAccessibilityService.captureNow(delayMs = 50L)
+            ScreenshotAccessibilityService.captureNow(delayMs = 50L, openCropOverlay = openCrop)
         } else {
             Toast.makeText(
                 context,
